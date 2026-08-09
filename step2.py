@@ -136,7 +136,7 @@ class CSVReader:
 			return ascan_list,_shared_time_us,_shared_fft_freqs_mhz #자동으로 튜플 묶임
 			
 		except Exception as e:
-			raise RuntimeError(f"파일을 읽는 중 에러가 발생했습니다 : {str(e)}")
+			raise RuntimeError(f"파일을 읽는 중 에러가 발생 : {str(e)}")
 			
 #4. AScanViewerGUI : 화면 UI 클래스
 class AScanViewerGUI:
@@ -267,9 +267,9 @@ class AScanViewerGUI:
 
 			#n sample -> fft y limit auto calibration
 			_est_peak = (32768.0*90.0)/ len(self.shared_time_us)
-			_dynamic_fft_ylim = math.floor(_est_peak/100.0)*100 #100 단위 올림
-			_fft_ylim_max=max(100,_dynamic_fft_ylim)#최소 100보장
-			self.ax_fft.set_ylim(0, _fft_ylim_max)  # 🎯 FFT Y축도 절대 기준으로 고정!
+			_dynamic_fft_ylim = math.floor(_est_peak/100.0)*100 #100 단위 내림
+			_fft_ylim_max=max(100,_dynamic_fft_ylim)# 최소 100보장
+			self.ax_fft.set_ylim(0, _fft_ylim_max)  # FFT Y축도 절대 기준으로 고정!
 	
 			#첫번째 0번 Row그래프 출력
 			self.display_ascan(col_index_in=0)
