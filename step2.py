@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from typing import List, Optional
+import math
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -111,7 +112,8 @@ class CSVReader:
 			#파일 로드 시점 : 첫번째 Row 기반으로 공통 시간/주파수축 1회만 생성
 			_first_row = df.iloc[0].dropna().values.astype(float)
 			_n_samples=len(_first_row)
-			
+
+
 			#공통시간축 us
 			_shared_time_us = np.arange(_n_samples)/self.config.sampling_rate*1e6
 			_freqs_hz = np.fft.rfftfreq(_n_samples, d=1.0 / self.config.sampling_rate)#공통주파수:Hz->Mhz 공통 배열 1회 생성
@@ -148,19 +150,20 @@ class AScanViewerGUI:
 		self.csv_reader = CSVReader(self.config)
 		self.ascan_list : List[AScan] = []#csv에서 불러온 ascan 객체들이 들어갈 리스트
 		self.current_ascan:Optional[np.ndarray]=None #현재 화면에출력중인 Ascan객체
+		self.total_cols : int = 0
 		
 		#공통 x 축 변수
 		self.shared_time_us:Optional[np.ndarray]=None
 		self.shared_fft_freqs_mhz:Optional[np.ndarray]=None
 		
 		#뷰 모드 선택 : 라디오 변수(raw/filtered)
-		self.view_mode_var = tk.StringVar(value="filtered")
+		self.view_mode_var = tk.StringVar(value="raw")
 		
 		# Matplotlib Line 객체 참조 변수 (고속 데이터 업데이트용)
 		self.line_signal : Optional[Line2D] = None #파형:Raw / Filtered
 		self.line_env : Optional[Line2D] = None #Envelope :모두 존재
 		self.line_fft : Optional[Line2D] = None #FFT:모두 존재
-		
+		self.line_pear_freq: Optional[Line2D] = None# 🎯 초록색 Peak 주파수 수직 가이드라인 추가
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
 		
@@ -186,10 +189,13 @@ class AScanViewerGUI:
 		
 		# 🎯 파형 / FFT 모드 토글 (Raw View vs Filtered View)
 		ttk.Label(_control_frame,text="Display Mode:").grid(row=0,column=4,padx=(20,5),pady=5)
-		ttk.Radiobutton(_control_frame,text="Filtered Data",variable=self.view_mode_var,value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=5,pady=5)
-		ttk.Radiobutton(_control_frame,text="Raw Data",variable=self.view_mode_var,value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=5,pady=5)
-		#Q.왜 라디오버튼이 2개?
-		
+			#Q.왜 라디오버튼이 2개?
+		self.config.filter_lowcut_mhz, self.config.filter_highcut_mhz
+		_low_Mhz, _high_Mhz=int(self.config.filter_lowcut_mhz),int(self.config.filter_highcut_mhz)
+		_filtered_btn_text = f"Filtered Data {_low_Mhz}-{_high_Mhz}Mhz"
+		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable=self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=5,pady=5)
+		ttk.Radiobutton(_control_frame,text="Raw Data", variable=self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=5,pady=5)
+	
 		#하단 그래프 출력 영역 plot panel
 		_plot_frame = ttk.Frame(self.window)
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
@@ -228,9 +234,11 @@ class AScanViewerGUI:
 		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=9)
 		self.ax_fft.set_ylabel("Magnitude",fontsize=9)
 		self.ax_fft.set_xlim(0,100)# 초음파 주파수 대역인 0~100MHz 범위 표시
-		self.ax_fft.set_ylim(0, 32768)  # 🎯 FFT Y축도 절대 기준으로 고정!
+
+		#self.ax_fft.set_ylim(0, _fft_ylim_max)  # 🎯 FFT Y축도 절대 기준으로 고정!
 		self.ax_fft.grid(True,linestyle='--',alpha=0.6) 
 		self.line_fft=self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
+		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
 		#
 		self.fig.tight_layout()
 		
@@ -242,12 +250,12 @@ class AScanViewerGUI:
 		try:
 			#csv 데이터 읽어오기
 			self.ascan_list, self.shared_time_us, self.shared_fft_freqs_mhz = self.csv_reader.load_file(_file_path)#자동으로 언패킹
-			_total_cols=len(self.ascan_list)
-			
+			self.total_cols = len(self.ascan_list)
+		
 			#UI 상태 업데이트(파일명 표시 및 스핀박스 범위 설정)
 			_filename= _file_path.split("/")[-1] #마지막 원소
-			self.lbl_status.config(text=f"Loaded:{_filename}({_total_cols} cols)",foreground="green")
-			self.spin_col.config(from_=0, to = _total_cols - 1)#규칙바꾸기
+			self.lbl_status.config(text=f"Loaded:{_filename}({self.total_cols} cols)",foreground="green")
+			self.spin_col.config(from_=0, to = self.total_cols - 1)#규칙바꾸기
 			self.spin_col.delete(0,tk.END)#기존 스핀박스 남아있던 이전번호(예:150) 지우는역할
 			self.spin_col.insert(0,"0") #초기화
 
@@ -257,6 +265,12 @@ class AScanViewerGUI:
 			self.ax_signal.set_xlim(self.shared_time_us[0], self.shared_time_us[-1])	
 			self.line_fft.set_xdata(self.shared_fft_freqs_mhz)
 
+			#n sample -> fft y limit auto calibration
+			_est_peak = (32768.0*90.0)/ len(self.shared_time_us)
+			_dynamic_fft_ylim = math.floor(_est_peak/100.0)*100 #100 단위 올림
+			_fft_ylim_max=max(100,_dynamic_fft_ylim)#최소 100보장
+			self.ax_fft.set_ylim(0, _fft_ylim_max)  # 🎯 FFT Y축도 절대 기준으로 고정!
+	
 			#첫번째 0번 Row그래프 출력
 			self.display_ascan(col_index_in=0)
 			
@@ -304,7 +318,7 @@ class AScanViewerGUI:
 			if self.current_ascan.raw_envelope_data is not None:
 				self.line_env.set_ydata(self.current_ascan.raw_envelope_data)
 				self.line_env.set_label("Raw Envelope")
-			self.ax_signal.set_title(f"1. Raw AScan Signal Col:{_col_idx}",fontsize=10,fontweight='bold')
+			self.ax_signal.set_title(f"1. Raw AScan Signal (Col Index: {_col_idx})",fontsize=10,fontweight='bold')
 		
 			#Raw FFT
 			if self.current_ascan.fft_magnitude is not None:
@@ -313,8 +327,10 @@ class AScanViewerGUI:
 				
 				peak_freq = self.current_ascan.center_freq_mhz
 				self.ax_fft.set_title(f"2. Raw FFT Spectrum : Peak {peak_freq:.2f}Mhz", fontsize=10, fontweight='bold')
-		
+				self.line_peak_freq.set_xdata([peak_freq, peak_freq])
+
 		else: # "filtered"
+
 			if self.current_ascan.filtered_data is not None:
 				self.line_signal.set_ydata(self.current_ascan.filtered_data)
 				self.line_signal.set_label("Filtered Signal")
@@ -332,6 +348,7 @@ class AScanViewerGUI:
 				self.line_fft.set_label("Filtered FFT")
 				
 				peak_freq = self.current_ascan.filtered_center_freq_mhz
+				self.line_peak_freq.set_xdata([peak_freq,peak_freq])
 				self.ax_fft.set_title(f"2. Filtered FFT Spectrum : Peak {peak_freq:.2f}Mhz", fontsize=10, fontweight='bold')
 		
 		self.ax_signal.legend(loc='upper right', fontsize=8)
