@@ -195,13 +195,17 @@ class AScanViewerGUI:
 		_filtered_btn_text = f"Filtered Data {_low_Mhz}-{_high_Mhz}Mhz"
 		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable=self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=5,pady=5)
 		ttk.Radiobutton(_control_frame,text="Raw Data", variable=self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=5,pady=5)
+
+		#내가 정한 우상단 위치에 ref save버튼
+		_btn_save_ref = ttk.Button(_control_frame, text='Save Ref.csv', command=self.save_ref_csv)
+		_btn_save_ref.grid(row=0, column=7, padx=(30,5), pady=5)
 	
 		#하단 그래프 출력 영역 plot panel
 		_plot_frame = ttk.Frame(self.window)
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
 		
 		#Matplotlib 도화지 Figufre 생성
-		self.fig=matplotlib.figure.Figure(figsize=(10,5),dpi=100)#액자
+		self.fig = matplotlib.figure.Figure(figsize=(10,5),dpi=100)#액자
 		
 		#self.ax=self.fig.add_subplot(111)#액자 안에 들어간 실제 그림: (행, 열, 위치)"화면 전체를 하나의 통 그래프로 쓰겠다"
 		self.ax_signal= self.fig.add_subplot(121)#좌:Time Domain
@@ -213,7 +217,7 @@ class AScanViewerGUI:
 		self.canvas=FigureCanvasTkAgg(figure=self.fig, master=_plot_frame)
 		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
 		#Matpolotlib 툴바(확대,이동,저장버튼)추가
-		_toolbar = matplotlib.backends.backend_tkagg.NavigationToolbar2Tk(self.canvas,window=_plot_frame)
+		_toolbar = matplotlib.backends.backend_tkagg.NavigationToolbar2Tk(self.canvas, window=_plot_frame)
 		_toolbar.update()
 		
 	def set_plot_style(self):
@@ -304,6 +308,22 @@ class AScanViewerGUI:
 			self.update_plots()
 			self.canvas.draw()
 			
+	def save_ref_csv(self):
+		if self.current_ascan is None:
+			messagebox.showwarning("저장할 Filtered Data가 없습니다. 먼저 csv파일 로드해주세요")
+			return
+		_save_path = 'ref.csv'
+		try:
+			#1D Ndarray (shape:6016,)을 (1,6016)의 2D 행으로 만들어, header없이 저장
+			_filtered_data_2d = self.current_ascan.filtered_data.reshape(1,-1)
+			pd.DataFrame(_filtered_data_2d).to_csv(_save_path, index=False, header=False)
+
+			_col_idx = self.current_ascan.col_index
+			_sample_count=len(self.current_ascan.filtered_data)
+			messagebox.showinfo("Save Success :",f"Col Index {_col_idx}의  Filtered Data {_sample_count}개 저장")
+		except Exception as e:
+			messagebox.showerror("Error",f"ref.csv save Failed {str(e)}")
+		
 	def update_plots(self):
 		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
 		_mode = self.view_mode_var.get()
