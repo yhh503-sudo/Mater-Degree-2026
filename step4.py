@@ -26,7 +26,35 @@ class ExperimentConfig :
 	filter_lowcut_mhz : float = 20.0 #DC 오프셋 및 아주 낮은 진동 노이즈 제거
 	filter_highcut_mhz : float = 70.0#초고주파 백그라운드 노이즈만 제거
 	filter_order : int= 2 #차수(Order)를 4 -> 2로 낮추면 천이 경계가 더 완만해져 원 신호 변형 최소화
+
+	#step4 : Align Mathod
+	align_method : str = "envelpe_peak" # "pos_max", "neg_min", "cross_corr", "envelope_peak"
+	align_pre_samples : int = 50    #align 기준점 이전 샘플 개수
+	align_post_samples: int = 550   #align 기준점 이후 샘플 개수
+
+#__slots__ 기반 경량 c-struct형 align 인덱스 저장 클래스
+
+class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
+	__slots__ = ('envelope_peak', 'pos_max', 'neg_min', 'cross_corr') #변수이름의 키
+	#__slots__는 파이썬에게 "이 클래스는 유연함(동적 추가)을 포기할 테니, 지정한 변수만 고정해서 C언어의 구조체(struct)처럼 딱딱하게 만들어줘
+	def __init__(self):
+		self.envelope_peak:Optional[int]=None
+		self.pos_max:Optional[int]=None
+		self.neg_min:Optional[int]=None
+		self.cross_corr:Optional[int]=None
+	def get(self, method:str) -> Optional[int]:
+		'''Method문자열 이름으로 빠르게 속성값 반환'''
+		if method == 'envelope_peak':
+			return self.envelope_peak
+		elif method == 'pos_max':
+			return self.pos_max
+		elif method == 'neg_min':
+			return self.neg_min
+		elif method == 'cross_corr':
+			return self.cross_corr
+		return None
 	
+
 #AScan:단일 AScan 데이터 클래스
 class AScan:
 	def __init__(self, raw_data_in:np.ndarray, row_index_in:int=0, col_index_in:int=0 ):
@@ -45,10 +73,43 @@ class AScan:
 		self.filtered_fft_magnitude:Optional[np.ndarray]=None
 		self.filtered_center_freq_mhz:Optional[np.ndarray]=None
 		self.filtered_envelope_data:Optional[np.ndarray]=None
-	
+
+		#3. STEP4 : Align 및 600 샘플 ROI 결과 저장 변수
+		self.align_indices : AlignIndices = AlignIndices()
+		self.selected_align_method : str = "envelpe_peak"
+
+	@property # "메서드(함수)를 '변수(속성)'처럼 사용 : 읽기 전용(Read-Only)
+	# 사용 시 소괄호 () 없이 깔끔하게 변수처럼 접근!
+    #idx = ascan.current_align_index
+	def current_align_index(self) -> Optional[int] : #None이 반환될 수도 있음
+		'''현재 선택된 align방법에 따라 index 반환'''
+		return self.align_indices.get(self.selected_align_method)
+	 
 	# ==========================================
     # 🎯 독립된 개별 신호 처리 메서드 모음
     # ==========================================	
+
+	def compute_all_align_indices(self, ref_template:Optional[np.ndarray]=None):
+		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
+		if self.filtered_data is None or self.filtered_envelope_data is None:#align 대상은 : 반드시 밴드패스 거친
+			return	
+		target_signal = self.filtered_data
+		target_envelope = self.filtered_envelope_data
+
+		#1. Envelope Peak
+		self.align_indices.envelope_peak = int(np.argmax(target_envelope))
+		#np.argmax(target_env)"가장 큰 피크가 있는 샘플의 위치 번호"를 반환int : "NumPy 전용 정수(np.int64)를 순수 파이썬 정수(int)로 바꿔서 __slots__에 깔끔하고 안전하게 저장하기 위함"
+		#2. Positive Max
+		self.align_indices.pos_max = int(np.argmax(target_signal))
+		#3. Negative Min
+		self.align_indices.neg_min = int(np.argmin(target_signal))
+		#4. Cross Correlation (Patteren Matching
+		if ref_template is not None :
+			_corr = np.correlate(target_signal, ref_template, mode = 'same')
+			self.align_indices.cross_corr = int(np.argmax(_corr))
+		else: #템플릿이 없으면, 기본적으로 envelope_peak 결과를 대입
+			self.align_indices.cross_corr = self.align_indices.envelope_peak
+
 	def compute_fft(self, signal: np.ndarray, freqs_mhz:Optional[np.ndarray]=None) -> Tuple[Optional[np.ndarray],Optional[float]]:
 		"""통일 FFT 함수 (Magnitude 배열, Center Frequency 튜플 반환)"""
 		n_samples = len(signal)
@@ -89,18 +150,21 @@ class AScan:
 		_analytic_signal = hilbert(signal)
 		return np.abs(_analytic_signal)
 		
-	def process_full_pipeline(self, sampling_rate:float, lowcut_mhz:float, highcut_mhz:float, order:int=2, freqs_mhz_in:Optional[np.ndarray]=None):
+	def process_full_pipeline(self, sampling_rate:float, lowcut_mhz:float, highcut_mhz:float, order:int=2, freqs_mhz_in:Optional[np.ndarray]=None, align_method:str="envelope_peak",ref_template:Optional[np.ndarray]=None):
 		#최초 1회 사전 계산
-		#Raw
+		#1. Raw Analysis 
 		self.fft_magnitude,self.center_freq_mhz = self.compute_fft(self.raw_data,freqs_mhz_in)
 		self.raw_envelope_data = self.extract_envelope(self.raw_data)
-		#BandPass
+		#2. BandPass Analysis
 		self.apply_bandpass_filter(sampling_rate,lowcut_mhz,highcut_mhz,order)
-		#Filtered 파형 FFT, Envelope
+		#3. Filtered 파형 FFT, Envelope
 		if self.filtered_data is not None:
 			self.filtered_fft_magnitude, self.filtered_center_freq_mhz = self.compute_fft(self.filtered_data, freqs_mhz_in)
 			self.filtered_envelope_data = self.extract_envelope(self.filtered_data)
-			
+		#4. Align
+		self.selected_align_method = align_method
+		self.compute_all_align_indices(ref_template=ref_template)
+		
 #CSV 파일 로더 클래스
 class CSVReader:
 	#csv 파일 읽어서, AScan객체 리스트 생성
