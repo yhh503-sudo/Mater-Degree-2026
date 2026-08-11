@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import math
 
 import matplotlib
