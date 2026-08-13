@@ -111,6 +111,7 @@ class AScan:
 			self.align_indices.cross_corr = int(np.argmax(_corr))
 		else: #템플릿이 없으면, 기본적으로 envelope_peak 결과를 대입
 			self.align_indices.cross_corr = self.align_indices.envelope_peak
+		pass
 
 	def compute_fft(self, signal: np.ndarray, freqs_mhz:Optional[np.ndarray]=None) -> Tuple[Optional[np.ndarray],Optional[float]]:
 		"""통일 FFT 함수 (Magnitude 배열, Center Frequency 튜플 반환)"""
@@ -165,7 +166,7 @@ class AScan:
 			self.filtered_envelope_data = self.extract_envelope(self.filtered_data)
 		#4. Align
 		self.selected_align_method = align_method
-		self.compute_all_align_indices(ref_template=ref_template)
+		self.compute_all_align_indices(ref_template = ref_template)
 		
 #CSV 파일 로더 클래스
 class CSVReader:
