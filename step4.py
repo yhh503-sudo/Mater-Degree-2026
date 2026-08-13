@@ -5,7 +5,7 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import math
-
+import os
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -28,11 +28,13 @@ class ExperimentConfig :
 	filter_order : int= 2 #차수(Order)를 4 -> 2로 낮추면 천이 경계가 더 완만해져 원 신호 변형 최소화
 
 	#step4 : Align Mathod
-	align_method : str = "envelpe_peak" # "pos_max", "neg_min", "cross_corr", "envelope_peak"
+	align_method : str = "envelope_peak" # "pos_max", "neg_min", "cross_corr", "envelope_peak"
 	align_pre_samples : int = 50    #align 기준점 이전 샘플 개수
 	align_post_samples: int = 550   #align 기준점 이후 샘플 개수
 
-#__slots__ 기반 경량 c-struct형 align 인덱스 저장 클래스
+	#신규 : ref.csv 파일 경로 추가
+	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
+
 
 class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
 	__slots__ = ('envelope_peak', 'pos_max', 'neg_min', 'cross_corr') #변수이름의 키
@@ -71,12 +73,12 @@ class AScan:
 		#2. Filtered 파형 분석 결과
 		self.filtered_data:Optional[np.ndarray]=None
 		self.filtered_fft_magnitude:Optional[np.ndarray]=None
-		self.filtered_center_freq_mhz:Optional[np.ndarray]=None
+		self.filtered_center_freq_mhz:Optional[float]=None
 		self.filtered_envelope_data:Optional[np.ndarray]=None
 
 		#3. STEP4 : Align 및 600 샘플 ROI 결과 저장 변수
 		self.align_indices : AlignIndices = AlignIndices()
-		self.selected_align_method : str = "envelpe_peak"
+		self.selected_align_method : str = "envelope_peak"
 
 	@property # "메서드(함수)를 '변수(속성)'처럼 사용 : 읽기 전용(Read-Only)
 	# 사용 시 소괄호 () 없이 깔끔하게 변수처럼 접근!
@@ -103,7 +105,7 @@ class AScan:
 		self.align_indices.pos_max = int(np.argmax(target_signal))
 		#3. Negative Min
 		self.align_indices.neg_min = int(np.argmin(target_signal))
-		#4. Cross Correlation (Patteren Matching
+		#4. Cross Correlation (Pattern Matching
 		if ref_template is not None :
 			_corr = np.correlate(target_signal, ref_template, mode = 'same')
 			self.align_indices.cross_corr = int(np.argmax(_corr))
@@ -168,10 +170,26 @@ class AScan:
 #CSV 파일 로더 클래스
 class CSVReader:
 	#csv 파일 읽어서, AScan객체 리스트 생성
-	def __init__(self, config_in:ExperimentConfig):
-		self.config=config_in
-	def load_file(self,file_path_in:str) -> tuple[List[AScan],np.ndarray,np.ndarray]:
+	def __init__(self, config_in : ExperimentConfig):
+		self.config = config_in
+
+	def load_ref_template(self) -> Optional[np.ndarray]:
+		#Config에 지정된 ref.csv 파일에서 첫 번째 행 template 데이터를 1회 로드
+		_path = self.config.ref_template_csv_path
+		if not _path or not os.path.exists(_path) :
+			return None
 		try:
+			df = pd.read_csv(_path, header=None, nrows=1)
+			return df.iloc[0].dropna().values.astype(float)
+		except Exception as e:
+			print(f"[Warning] Ref Template 로드 실패 : {e}")
+			return None
+
+	def load_file(self, file_path_in:str) -> tuple[List[AScan],np.ndarray,np.ndarray]:
+		try:
+			# csv 파일 데이터, ref 파형 데이터에서 처음 1회만 실행
+			_ref_template = self.load_ref_template()
+
 			df = pd.read_csv(file_path_in,header=None)
 			#파일 로드 시점 : 첫번째 Row 기반으로 공통 시간/주파수축 1회만 생성
 			_first_row = df.iloc[0].dropna().values.astype(float)
@@ -189,13 +207,14 @@ class CSVReader:
 				signal_array = row.dropna().values.astype(float)
 				ascan = AScan(raw_data_in=signal_array,
 					row_index_in = 0,# Row = 0 고정
-					col_index_in = idx)# Col = CSV 내 행 번호
+					col_index_in = int(idx))# Col = CSV 내 행 번호
 				ascan.process_full_pipeline(
 					sampling_rate = self.config.sampling_rate,
 					lowcut_mhz=self.config.filter_lowcut_mhz,
 					highcut_mhz=self.config.filter_highcut_mhz,
 					order=self.config.filter_order,
-					freqs_mhz_in =_shared_fft_freqs_mhz)					
+					freqs_mhz_in =_shared_fft_freqs_mhz,
+					ref_template = _ref_template)
 				ascan_list.append(ascan)
 			return ascan_list,_shared_time_us,_shared_fft_freqs_mhz #자동으로 튜플 묶임
 			
