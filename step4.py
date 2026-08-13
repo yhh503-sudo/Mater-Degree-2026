@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from matplotlib.gridspec import GridSpec
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
@@ -10,7 +11,8 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
+from matplotlib. lines import Line2D
+import GridSpec
 
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
@@ -29,8 +31,8 @@ class ExperimentConfig :
 
 	#step4 : Align Mathod
 	align_method : str = "envelope_peak" # "pos_max", "neg_min", "cross_corr", "envelope_peak"
-	align_pre_samples : int = 50    #align 기준점 이전 샘플 개수
-	align_post_samples: int = 550   #align 기준점 이후 샘플 개수
+	align_pre_samples : int = 100    #align 기준점 이전 샘플 개수
+	align_post_samples: int = 400   #align 기준점 이후 샘플 개수
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
@@ -226,8 +228,8 @@ class CSVReader:
 class AScanViewerGUI:
 	def __init__(self):
 		self.window = tk.Tk()
-		self.window.title("Ultrasound Signal Processor - STEP 3 (BandPass Envelope)")
-		self.window.geometry("1200x650")
+		self.window.title("Ultrasound Signal Processor : STEP4 (Align & ROI)")
+		self.window.geometry("1280x720")
 		
 		#데이터 분석 객체 생성
 		self.config = ExperimentConfig()
@@ -242,12 +244,18 @@ class AScanViewerGUI:
 		
 		#뷰 모드 선택 : 라디오 변수(raw/filtered)
 		self.view_mode_var = tk.StringVar(value="raw")
+		self.align_method_var = tk.StringVar(value=self.config.align_method)
 		
 		# Matplotlib Line 객체 참조 변수 (고속 데이터 업데이트용)
-		self.line_signal : Optional[Line2D] = None #파형:Raw / Filtered
-		self.line_env : Optional[Line2D] = None #Envelope :모두 존재
-		self.line_fft : Optional[Line2D] = None #FFT:모두 존재
-		self.line_pear_freq: Optional[Line2D] = None# 🎯 초록색 Peak 주파수 수직 가이드라인 추가
+		self.line_whole_signal : Optional[Line2D] = None #파형:Raw / Filtered
+		self.line_whole_env : Optional[Line2D] = None #Envelope :모두 존재
+		self.line_whole_fft : Optional[Line2D] = None #FFT:모두 존재
+		self.line_peak_freq: Optional[Line2D] = None# 🎯 초록색 Peak 주파수 수직 가이드라인 추가
+
+		self.line_roi_signal : Optional[Line2D] = None
+		self.line_roi_env : Optional[Line2D] = None
+		self.align_markers = []
+		
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
 		
@@ -256,40 +264,64 @@ class AScanViewerGUI:
 		#상단 버튼 및 설정 영역 Control Panel
 		_control_frame = ttk.LabelFrame(self.window,text="Control Panel",padding=10)
 		_control_frame.pack(side=tk.TOP,fill=tk.X,padx=10,pady=5) #x여백좌우:10px,y여백위아래:5px
-		#csv 파일 열기 버튼
-		#콜백 함수"지금 실행하는게 아니라,이벤트(일)터졌을때 실행해달라'나중에 불러(Call Back)'줄 함수를 등록
+
+		#좌상단 1열: csv 파일 열기 버튼
 		_btn_open=ttk.Button(_control_frame,text="Open CSV",command=self.open_csv)
-		_btn_open.grid(row=0,column=0,padx=5,pady=5)
-		#파일 상태 표시 글자
+		_btn_open.grid(row=0,column=0,padx=5,pady=2)
 		self.lbl_status=ttk.Label(_control_frame,text="No CSV File",font=("Consolas",9,"italic"),foreground="gray")
-		self.lbl_status.grid(row=0,column=1,padx=10,pady=5,sticky="w")#왼쪽정렬
-		#Col 번호 선택 스핀박스(위/아래 화살표 버튼으로 숫자 바꾸기)
+		self.lbl_status.grid(row=0,column=1,padx=10,pady=2,sticky="w")#왼쪽정렬
+
+		#좌상단 2열 : Col 번호 선택 스핀박스(위/아래 화살표 버튼으로 숫자 바꾸기)
 		ttk.Label(_control_frame,text="Select Col Index:").grid(row=0,column=2,padx=(20,5),pady=5)
 		self.spin_col = ttk.Spinbox(_control_frame,from_=0,to=0,width=8,command=self.on_col_change)
-		#from_, to : tkinter 스핀박스 숫자 범위
-		self.spin_col.grid(row=0, column=3, padx=5, pady=5)
+		self.spin_col.grid(row=0, column=3, padx=5, pady=2)
 		self.spin_col.bind("<Return>", self._on_enter_pressed)
-		#묶기 : Return = 엔터키 : 이벤트 떄, 호출함수 : self._on_col_change
 		
-		# 🎯 파형 / FFT 모드 토글 (Raw View vs Filtered View)
-		ttk.Label(_control_frame,text="Display Mode:").grid(row=0,column=4,padx=(20,5),pady=5)
+		#좌상단 3열 : 토글 (Raw View vs Filtered View)
+		ttk.Label(_control_frame,text="Display Mode:").grid(row=0,column=4,padx=(15,5),pady=2)
 			#Q.왜 라디오버튼이 2개?
 		self.config.filter_lowcut_mhz, self.config.filter_highcut_mhz
 		_low_Mhz, _high_Mhz=int(self.config.filter_lowcut_mhz),int(self.config.filter_highcut_mhz)
 		_filtered_btn_text = f"Filtered Data {_low_Mhz}-{_high_Mhz}Mhz"
-		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable=self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=5,pady=5)
-		ttk.Radiobutton(_control_frame,text="Raw Data", variable=self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=5,pady=5)
-	
-		#하단 그래프 출력 영역 plot panel
+		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable=self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=3,pady=2)
+		ttk.Radiobutton(_control_frame,text="Raw Data", variable=self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=3,pady=2)
+
+		#좌상단 4열 : align 라디오 버튼 4종
+		ttk.Separator(_control_frame, orient='vertical').grid(row=0,column=7,rowspan=2,sticky="ns",padx=15)
+		ttk.Label(_control_frame,text="Align Method:",font=("Segoe UI",9,"bold")).grid(row=0,column=8,rowspan=2,padx=(0,5),pady=2)
+
+		align_methods=[
+			("Envelope Peak","envelope_peak",0,9),
+			("Pos Max","pos_max",0,10),
+			("Neg Min","neg_min",1,9),
+			("Cross corr","cross_corr",1,10),
+		]
+
+		for text,val,r,c in align_methods:
+			ttk.Radiobutton(
+				_control_frame,
+				text=text,
+				variable=self.align_method_var,
+				value=val,
+				command=self.on_align_method_change
+			).grid(row=r, column=c, padx=5, pady=2, sticky='w')#좌측정렬
+
+		## #하단 그래프 출력 영역 plot panel
 		_plot_frame = ttk.Frame(self.window)
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
 		
 		#Matplotlib 도화지 Figufre 생성
-		self.fig=matplotlib.figure.Figure(figsize=(10,5),dpi=100)#액자
-		
+		self.fig = matplotlib.figure.Figure(figsize=(12,6),dpi=100)#액자 1200px,600px
+
 		#self.ax=self.fig.add_subplot(111)#액자 안에 들어간 실제 그림: (행, 열, 위치)"화면 전체를 하나의 통 그래프로 쓰겠다"
-		self.ax_signal= self.fig.add_subplot(121)#좌:Time Domain
-		self.ax_fft = self.fig.add_subplot(122)#우:Frequency Domain
+		#self.ax_signal= self.fig.add_subplot(121)#좌:Time Domain
+		#self.ax_fft = self.fig.add_subplot(122)#우:Frequency Domain
+		
+		gs = GridSpec(2,2,figure = self.fig, width_ratios=[1,1.2])
+		self.ax_whole = self.fig.add_subplot(gs[0,0])#좌상단
+		self.ax_fft = self.fig.add_subplot(gs[1,0])#좌하단
+		self.ax_roi = self.fig.add_subplot(gs[:,1])#우측전체
+
 		self.set_plot_style()
 		
 		#도화지를 Tkinter 창 안에 붙이기 : Matplotlib 혼자창 띄우는 도구
@@ -302,28 +334,39 @@ class AScanViewerGUI:
 		
 	def set_plot_style(self):
 		#초기 1회만 : 축, 격자, 빈 선 Line 셋팅
-		#1:좌측 Raw Signal 그래프 셋팅
-		self.ax_signal.set_title("AScan Signal & Envelope",fontsize=11,fontweight='bold')
-		self.ax_signal.set_xlabel("Time(us)", fontsize=9)
-		self.ax_signal.set_ylabel("Amplitude",fontsize=9)
-		self.ax_signal.set_ylim(-32768,32768)
-		self.ax_signal.grid(True,linestyle='--',alpha=0.6)
-		
-		self.line_signal= self.ax_signal.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
-		self.line_env=self.ax_signal.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
-		self.ax_signal.legend(loc='upper right', fontsize=8)
+
+		#1:좌상단 Raw Signal 그래프 셋팅
+		self.ax_whole.set_title("Whole Signal",fontsize=11,fontweight='bold')
+		self.ax_whole.set_xlabel("Time(us)", fontsize=9)
+		self.ax_whole.set_ylabel("Amplitude",fontsize=9)
+		self.ax_whole.set_ylim(-32768,32768)
+		self.ax_whole.grid(True,linestyle='--',alpha=0.6)
+
+		# Line 객체 최초 단 1회 생성(고속 업데이트용 참조 보유)
+		self.line_whole_signal= self.ax_whole.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
+		self.line_whole_env=self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
+		self.ax_whole.legend(loc='upper right', fontsize=8)
 	
-		#2:우측 FFT Spectrum 그래프 셋팅
+		#2:좌하단 FFT Spectrum 그래프 셋팅
 		self.ax_fft.set_title("FFT Spectrum(Frequency Domain)",fontsize=11,fontweight='bold')
 		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=9)
 		self.ax_fft.set_ylabel("Magnitude",fontsize=9)
 		self.ax_fft.set_xlim(0,100)# 초음파 주파수 대역인 0~100MHz 범위 표시
-
-		#self.ax_fft.set_ylim(0, _fft_ylim_max)  # 🎯 FFT Y축도 절대 기준으로 고정!
 		self.ax_fft.grid(True,linestyle='--',alpha=0.6) 
-		self.line_fft=self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
+		self.line_whole_fft=self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
 		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
-		#
+
+		#ROI DTAIL Chart
+		self.ax_roi.set_title("ROI (Align Zone)",fontsize=11,fontweight='bold')
+		self.ax_roi.set_xlabel('Time(us)',fontsize=9)
+		self.ax_roi.set_ylabel('Ampltitude',fontsize=9)
+		self.ax_roi.grid(True,linestyle='--',alpha=0.6)
+
+		#ROI Line객체도 단 1회 생성 및 보관(포인터 재활용)
+		self.line_roi_signal = self.ax_roi.polt([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
+		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
+		self.ax_roi.legend(loc='upper right',fontsize=8)
+		
 		self.fig.tight_layout()
 		
 	def open_csv(self):
