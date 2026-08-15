@@ -12,7 +12,6 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 from matplotlib. lines import Line2D
-import GridSpec
 
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
@@ -25,8 +24,8 @@ class ExperimentConfig :
 	bit_depth:int=15 # ADC Data Range (+- 2^15)
 	
 	#SETP3 : 필터링 기본 설정값(Mhz)
-	filter_lowcut_mhz : float = 20.0 #DC 오프셋 및 아주 낮은 진동 노이즈 제거
-	filter_highcut_mhz : float = 70.0#초고주파 백그라운드 노이즈만 제거
+	filter_lowcut_Mhz : float = 20.0 #DC 오프셋 및 아주 낮은 진동 노이즈 제거
+	filter_highcut_Mhz : float = 70.0#초고주파 백그라운드 노이즈만 제거
 	filter_order : int= 2 #차수(Order)를 4 -> 2로 낮추면 천이 경계가 더 완만해져 원 신호 변형 최소화
 
 	#step4 : Align Mathod
@@ -46,6 +45,7 @@ class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
 		self.pos_max:Optional[int]=None
 		self.neg_min:Optional[int]=None
 		self.cross_corr:Optional[int]=None
+
 	def get(self, method:str) -> Optional[int]:
 		'''Method문자열 이름으로 빠르게 속성값 반환'''
 		if method == 'envelope_peak':
@@ -63,37 +63,39 @@ class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
 class AScan:
 	def __init__(self, raw_data_in:np.ndarray, row_index_in:int=0, col_index_in:int=0 ):
 		self.raw_data :np.ndarray = raw_data_in
-		#변수 이름 뒤에 콜론(:) 타입을 적어주는 것은 "이 변수에는 이러한 타입의 데이터가 들어올 예정입니다"라고 사람(개발자)과 에디터(VS Code)에게 알려주는 설명서(주석)
 		self.row_index : int = row_index_in# 단일 CSV 시 0으로 고정
 		self.col_index : int = col_index_in# CSV 파일 내 행(Row) 번호
 		
 		# 1. Raw 파형 분석 결과
 		self.fft_magnitude:Optional[np.ndarray]=None #set_ydata(self.current_ascan.fft_magnitude)
-		self.center_freq_mhz:Optional[float]=None
+		self.center_freq_Mhz:Optional[float]=None
 		self.raw_envelope_data:Optional[np.ndarray]=None
 		
 		#2. Filtered 파형 분석 결과
-		self.filtered_data:Optional[np.ndarray]=None
-		self.filtered_fft_magnitude:Optional[np.ndarray]=None
-		self.filtered_center_freq_mhz:Optional[float]=None
-		self.filtered_envelope_data:Optional[np.ndarray]=None
+		self.filtered_data : Optional[np.ndarray] = None
+		self.filtered_fft_magnitude : Optional[np.ndarray] = None
+		self.filtered_center_freq_Mhz : Optional[float] = None
+		self.filtered_envelope_data : Optional[np.ndarray] = None
 
 		#3. STEP4 : Align 및 600 샘플 ROI 결과 저장 변수
 		self.align_indices : AlignIndices = AlignIndices()
-		self.selected_align_method : str = "envelope_peak"
-
+	
 	@property # "메서드(함수)를 '변수(속성)'처럼 사용 : 읽기 전용(Read-Only)
 	# 사용 시 소괄호 () 없이 깔끔하게 변수처럼 접근!
-    #idx = ascan.current_align_index
-	def current_align_index(self) -> Optional[int] : #None이 반환될 수도 있음
+    # 사용예 : idx = ascan.current_align_index
+	def current_align_index(self)->Optional[int] : #None이 반환될 수도 있음
 		'''현재 선택된 align방법에 따라 index 반환'''
 		return self.align_indices.get(self.selected_align_method)
+
+	def get_align_index(self, method : str) -> Optional[int] : 
+		'''지정한 어라인 방식의 인덱스 반환'''
+		return self.align_indices.get(method)
 	 
 	# ==========================================
     # 🎯 독립된 개별 신호 처리 메서드 모음
     # ==========================================	
 
-	def compute_all_align_indices(self, ref_template:Optional[np.ndarray]=None):
+	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None):
 		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
 		if self.filtered_data is None or self.filtered_envelope_data is None:#align 대상은 : 반드시 밴드패스 거친
 			return	
@@ -115,29 +117,30 @@ class AScan:
 			self.align_indices.cross_corr = self.align_indices.envelope_peak
 		pass
 
-	def compute_fft(self, signal: np.ndarray, freqs_mhz:Optional[np.ndarray]=None) -> Tuple[Optional[np.ndarray],Optional[float]]:
+	def compute_fft(self, signal: np.ndarray, fft_freqs_Mhz_in : Optional[np.ndarray]=None) -> Tuple[Optional[np.ndarray],Optional[float]]:
 		"""통일 FFT 함수 (Magnitude 배열, Center Frequency 튜플 반환)"""
+
 		n_samples = len(signal)
 		if n_samples==0:
 			return None, None	
 
 		_fft_complex = np.fft.rfft(signal) #Real FFT(양의주파수 성분만 반환)
 		_fft_magnitude = np.abs(_fft_complex)/ n_samples
-		
-		_center_freq_mhz=None
-		if freqs_mhz is not None and len(_fft_magnitude)>0:
+		_center_freq_Mhz=None
+
+		if fft_freqs_Mhz_in is not None and len(_fft_magnitude)>0:
 			_peak_idx = np.argmax(_fft_magnitude)
-			_center_freq_mhz = freqs_mhz[_peak_idx]
+			_center_freq_Mhz = fft_freqs_Mhz_in[_peak_idx]
 			
-		return _fft_magnitude, _center_freq_mhz
+		return _fft_magnitude, _center_freq_Mhz
 		
-	def apply_bandpass_filter(self, sampling_rate_in : float, lowcut_mhz_in : float, highcut_mhz_in : float, order: Optional[int] = 2):
+	def apply_bandpass_filter(self, sampling_rate_in : float, lowcut_Mhz_in : float, highcut_Mhz_in : float, order: Optional[int] = 2):
 		"""2. Butterworth 밴드패스 필터링 적용 (원할 때 개별 재실행 가능)"""
 		if len(self.raw_data)==0:
 			return
 		nyquist = 0.5 * sampling_rate_in	
-		raw_low = (lowcut_mhz_in * 1e6) / nyquist
-		raw_high = (highcut_mhz_in * 1e6) / nyquist
+		raw_low = (lowcut_Mhz_in * 1e6) / nyquist
+		raw_high = (highcut_Mhz_in * 1e6) / nyquist
 		
 		low = max(0.001, min(raw_low, 0.98))
 		high = max(0.002, min(raw_high,0.99))
@@ -145,29 +148,38 @@ class AScan:
 		if low >= high:
 			high = min(low + 0.01, 0.99)
 			
-		b, a = butter(order, [low,high],btype='band')
-		self.filtered_data =filtfilt(b,a,self.raw_data)	
+		b, a = butter(order, [low, high],btype='band')
+		self.filtered_data =filtfilt(b, a, self.raw_data)	
+		pass
 			
-	def extract_envelope(self, signal:np.ndarray)-> Optional[np.ndarray]:
+	def extract_envelope(self, signal:np.ndarray) -> Optional[np.ndarray]:
 		"""Hilbert 변환 기반 Envelope 추출 함수 (주파수 입력 불필요)"""
 		if len(signal) ==0:
 			return None
 		_analytic_signal = hilbert(signal)
 		return np.abs(_analytic_signal)
 		
-	def process_full_pipeline(self, sampling_rate:float, lowcut_mhz:float, highcut_mhz:float, order:int=2, freqs_mhz_in:Optional[np.ndarray]=None, align_method:str="envelope_peak",ref_template:Optional[np.ndarray]=None):
+	def process_full_pipeline(self, 
+						   sampling_rate:float, 
+						   lowcut_mhz:float, highcut_mhz:float, order:int=2, 
+						   fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
+						   align_method:str="envelope_peak",
+						   ref_template:Optional[np.ndarray]=None):
 		#최초 1회 사전 계산
+
 		#1. Raw Analysis 
-		self.fft_magnitude,self.center_freq_mhz = self.compute_fft(self.raw_data,freqs_mhz_in)
+		self.fft_magnitude, self.center_freq_Mhz = self.compute_fft(self.raw_data, fft_freqs_Mhz_in)
 		self.raw_envelope_data = self.extract_envelope(self.raw_data)
+
 		#2. BandPass Analysis
 		self.apply_bandpass_filter(sampling_rate,lowcut_mhz,highcut_mhz,order)
+
 		#3. Filtered 파형 FFT, Envelope
 		if self.filtered_data is not None:
-			self.filtered_fft_magnitude, self.filtered_center_freq_mhz = self.compute_fft(self.filtered_data, freqs_mhz_in)
+			self.filtered_fft_magnitude, self.filtered_center_freq_Mhz = self.compute_fft(self.filtered_data, fft_freqs_Mhz_in)
 			self.filtered_envelope_data = self.extract_envelope(self.filtered_data)
+
 		#4. Align
-		self.selected_align_method = align_method
 		self.compute_all_align_indices(ref_template = ref_template)
 		
 #CSV 파일 로더 클래스
@@ -176,7 +188,7 @@ class CSVReader:
 	def __init__(self, config_in : ExperimentConfig):
 		self.config = config_in
 
-	def load_ref_template(self) -> Optional[np.ndarray]:
+	def load_ref_template(self) -> Optional[np.ndarray] :
 		#Config에 지정된 ref.csv 파일에서 첫 번째 행 template 데이터를 1회 로드
 		_path = self.config.ref_template_csv_path
 		if not _path or not os.path.exists(_path) :
@@ -188,7 +200,7 @@ class CSVReader:
 			print(f"[Warning] Ref Template 로드 실패 : {e}")
 			return None
 
-	def load_file(self, file_path_in:str) -> tuple[List[AScan],np.ndarray,np.ndarray]:
+	def load_file(self, file_path_in:str) -> tuple[Optional:List[AScan],Optional:np.ndarray,Optional:np.ndarray]:
 		try:
 			# csv 파일 데이터, ref 파형 데이터에서 처음 1회만 실행
 			_ref_template = self.load_ref_template()
@@ -198,11 +210,13 @@ class CSVReader:
 			_first_row = df.iloc[0].dropna().values.astype(float)
 			_n_samples=len(_first_row)
 
-
-			#공통시간축 us
-			_shared_time_us = np.arange(_n_samples)/self.config.sampling_rate*1e6
-			_freqs_hz = np.fft.rfftfreq(_n_samples, d=1.0 / self.config.sampling_rate)#공통주파수:Hz->Mhz 공통 배열 1회 생성
-			_shared_fft_freqs_mhz = _freqs_hz / 1e6
+			#sample index : x축 공통
+			_shared_sample_indices = np.arange(_n_samples, dtype = int)
+			_time_distance = 1.0 / self.config.sampling_rate
+			_freqs_hz = np.fft.rfftfreq(_n_samples, d = _time_distance)
+			#Real FFT 실행했을 때 각 주파수 성분이 몇 Hz(헤르츠)인지 물리적 주파수 축을 계산해 주는 NumPy 함수
+			#Hz보다 MHz 표기가 훨씬 직관적이기 때문
+			_shared_fft_freqs_Mhz = _freqs_hz/ 1e6
 			
 			ascan_list=[]
 			for idx, row in df.iterrows():
@@ -213,16 +227,20 @@ class CSVReader:
 					col_index_in = int(idx))# Col = CSV 내 행 번호
 				ascan.process_full_pipeline(
 					sampling_rate = self.config.sampling_rate,
-					lowcut_mhz=self.config.filter_lowcut_mhz,
-					highcut_mhz=self.config.filter_highcut_mhz,
-					order=self.config.filter_order,
-					freqs_mhz_in =_shared_fft_freqs_mhz,
+					lowcut_Mhz = self.config.filter_lowcut_Mhz,
+					highcut_Mhz = self.config.filter_highcut_Mhz,
+					order = self.config.filter_order,
+					fft_freqs_Mhz_in = _shared_fft_freqs_Mhz,
 					ref_template = _ref_template)
 				ascan_list.append(ascan)
-			return ascan_list,_shared_time_us,_shared_fft_freqs_mhz #자동으로 튜플 묶임
+
+			if len(ascan_list)==0:
+				raise ValueError("None A Beam imported")
+			
+			return ascan_list, _shared_sample_indices, _shared_fft_freqs_Mhz #자동으로 튜플 묶임
 			
 		except Exception as e:
-			raise RuntimeError(f"파일을 읽는 중 에러가 발생 : {str(e)}")
+			raise RuntimeError(f"csv 파일을 읽는 중 에러가 발생 : {str(e)}")
 			
 #4. AScanViewerGUI : 화면 UI 클래스
 class AScanViewerGUI:
@@ -234,17 +252,17 @@ class AScanViewerGUI:
 		#데이터 분석 객체 생성
 		self.config = ExperimentConfig()
 		self.csv_reader = CSVReader(self.config)
-		self.ascan_list : List[AScan] = []#csv에서 불러온 ascan 객체들이 들어갈 리스트
-		self.current_ascan:Optional[np.ndarray]=None #현재 화면에출력중인 Ascan객체
+		self.ascan_list : List[AScan] = [] #csv에서 불러온 ascan 객체들이 들어갈 리스트
+		self.current_ascan : Optional[AScan] = None #현재 화면에출력중인 Ascan객체
 		self.total_cols : int = 0
 		
-		#공통 x 축 변수
-		self.shared_time_us:Optional[np.ndarray]=None
-		self.shared_fft_freqs_mhz:Optional[np.ndarray]=None
+		#공통 x 축 변수 : 샘플 인덱스 배열
+		self.shared_sample_indices : Optional[np.ndarray] = None
+		self.shared_fft_freqs_Mhz:Optional[np.ndarray]=None
 		
-		#뷰 모드 선택 : 라디오 변수(raw/filtered)
+		#UI 컨트롤 변수들 : 뷰 모드 선택 : 라디오 변수(raw/filtered), Align
 		self.view_mode_var = tk.StringVar(value="raw")
-		self.align_method_var = tk.StringVar(value=self.config.align_method)
+		self.align_method_var = tk.StringVar(value = self.config.align_method)
 		
 		# Matplotlib Line 객체 참조 변수 (고속 데이터 업데이트용)
 		self.line_whole_signal : Optional[Line2D] = None #파형:Raw / Filtered
@@ -252,43 +270,45 @@ class AScanViewerGUI:
 		self.line_whole_fft : Optional[Line2D] = None #FFT:모두 존재
 		self.line_peak_freq: Optional[Line2D] = None# 🎯 초록색 Peak 주파수 수직 가이드라인 추가
 
-		self.line_roi_signal : Optional[Line2D] = None
-		self.line_roi_env : Optional[Line2D] = None
-		self.align_markers = []
+		self.line_roi_signal : Optional[Line2D] = None #ROI 파형
+		self.line_roi_env : Optional[Line2D] = None #ROI 엔벨롭
+		self.align_markers : Optional[Line2D] = None #동적 수직선 마커 저장용
 		
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
 		
 	def create_widgets(self):
-		
-		#상단 버튼 및 설정 영역 Control Panel
-		_control_frame = ttk.LabelFrame(self.window,text="Control Panel",padding=10)
-		_control_frame.pack(side=tk.TOP,fill=tk.X,padx=10,pady=5) #x여백좌우:10px,y여백위아래:5px
+
+		#-------------------------------------
+		# 상단  Control Panel : 버튼 및 설정 영역
+		#-------------------------------------
+
+		_control_frame = ttk.LabelFrame(self.window,text="Control Panel",padding=8)
+		_control_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5) #x여백좌우:10px,y여백위아래:5px
 
 		#좌상단 1열: csv 파일 열기 버튼
 		_btn_open=ttk.Button(_control_frame,text="Open CSV",command=self.open_csv)
-		_btn_open.grid(row=0,column=0,padx=5,pady=2)
+		_btn_open.grid(row=0, column=0, padx=5, pady=2)
+
 		self.lbl_status=ttk.Label(_control_frame,text="No CSV File",font=("Consolas",9,"italic"),foreground="gray")
 		self.lbl_status.grid(row=0,column=1,padx=10,pady=2,sticky="w")#왼쪽정렬
 
 		#좌상단 2열 : Col 번호 선택 스핀박스(위/아래 화살표 버튼으로 숫자 바꾸기)
-		ttk.Label(_control_frame,text="Select Col Index:").grid(row=0,column=2,padx=(20,5),pady=5)
-		self.spin_col = ttk.Spinbox(_control_frame,from_=0,to=0,width=8,command=self.on_col_change)
+		ttk.Label(_control_frame,text="Col Index:").grid(row=0,column=2,padx=(15,5),pady=2)
+		self.spin_col = ttk.Spinbox(_control_frame, from_=0, to=0, width=8, command=self.on_col_change)
 		self.spin_col.grid(row=0, column=3, padx=5, pady=2)
 		self.spin_col.bind("<Return>", self._on_enter_pressed)
 		
 		#좌상단 3열 : 토글 (Raw View vs Filtered View)
-		ttk.Label(_control_frame,text="Display Mode:").grid(row=0,column=4,padx=(15,5),pady=2)
-			#Q.왜 라디오버튼이 2개?
-		self.config.filter_lowcut_mhz, self.config.filter_highcut_mhz
-		_low_Mhz, _high_Mhz=int(self.config.filter_lowcut_mhz),int(self.config.filter_highcut_mhz)
-		_filtered_btn_text = f"Filtered Data {_low_Mhz}-{_high_Mhz}Mhz"
-		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable=self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=3,pady=2)
-		ttk.Radiobutton(_control_frame,text="Raw Data", variable=self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=3,pady=2)
+		ttk.Label(_control_frame, text="Display Mode:").grid(row=0,column=4,padx=(15,5),pady=2)
+		_low_Mhz, _high_Mhz=int(self.config.filter_lowcut_Mhz),int(self.config.filter_highcut_Mhz)
+		_filtered_btn_text = f"Filtered {_low_Mhz}-{_high_Mhz}Mhz"
+		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable= self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=3,pady=2)
+		ttk.Radiobutton(_control_frame,text="Raw Data", variable= self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=3,pady=2)
 
 		#좌상단 4열 : align 라디오 버튼 4종
-		ttk.Separator(_control_frame, orient='vertical').grid(row=0,column=7,rowspan=2,sticky="ns",padx=15)
-		ttk.Label(_control_frame,text="Align Method:",font=("Segoe UI",9,"bold")).grid(row=0,column=8,rowspan=2,padx=(0,5),pady=2)
+		ttk.Separator(_control_frame, orient='vertical').grid(row=0,column=7,rowspan=2,sticky="ns",padx=15) #구간 나누기
+		ttk.Label(_control_frame, text="Align Method:",font=("Segoe UI",9,"bold")).grid(row=0,column=8,rowspan=2,padx=(0,5),pady=2)
 
 		align_methods=[
 			("Envelope Peak","envelope_peak",0,9),
@@ -297,37 +317,34 @@ class AScanViewerGUI:
 			("Cross corr","cross_corr",1,10),
 		]
 
-		for text,val,r,c in align_methods:
+		for text, val, r, c in align_methods:
 			ttk.Radiobutton(
 				_control_frame,
+				variable = self.align_method_var,
 				text=text,
-				variable=self.align_method_var,
 				value=val,
 				command=self.on_align_method_change
 			).grid(row=r, column=c, padx=5, pady=2, sticky='w')#좌측정렬
 
-		## #하단 그래프 출력 영역 plot panel
+		#-------------------------------------
+		# 하단  그래프 출력 영역 plot panel
+		#-------------------------------------
 		_plot_frame = ttk.Frame(self.window)
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
 		
 		#Matplotlib 도화지 Figufre 생성
-		self.fig = matplotlib.figure.Figure(figsize=(12,6),dpi=100)#액자 1200px,600px
-
-		#self.ax=self.fig.add_subplot(111)#액자 안에 들어간 실제 그림: (행, 열, 위치)"화면 전체를 하나의 통 그래프로 쓰겠다"
-		#self.ax_signal= self.fig.add_subplot(121)#좌:Time Domain
-		#self.ax_fft = self.fig.add_subplot(122)#우:Frequency Domain
-		
-		gs = GridSpec(2,2,figure = self.fig, width_ratios=[1,1.2])
+		self.fig = matplotlib.figure.Figure(figsize=(12,6), dpi=100)#액자 1200px,600px
+		gs = GridSpec(2,2, figure = self.fig, width_ratios=[1,1.2])#오른쪽열 가로폭, 왼쪽열보다 1.2배 넓게 설정
 		self.ax_whole = self.fig.add_subplot(gs[0,0])#좌상단
 		self.ax_fft = self.fig.add_subplot(gs[1,0])#좌하단
 		self.ax_roi = self.fig.add_subplot(gs[:,1])#우측전체
 
 		self.set_plot_style()
 		
-		#도화지를 Tkinter 창 안에 붙이기 : Matplotlib 혼자창 띄우는 도구
 		#이를 Tkinter 창 내부에 집어넣기 위해 FigureCanvasTkAgg라는 '연결 다리(도화지)'
-		self.canvas=FigureCanvasTkAgg(figure=self.fig, master=_plot_frame)
-		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
+		self.canvas=FigureCanvasTkAgg(figure = self.fig, master = _plot_frame)
+		self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
 		#Matpolotlib 툴바(확대,이동,저장버튼)추가
 		_toolbar = matplotlib.backends.backend_tkagg.NavigationToolbar2Tk(self.canvas,window=_plot_frame)
 		_toolbar.update()
@@ -335,38 +352,41 @@ class AScanViewerGUI:
 	def set_plot_style(self):
 		#초기 1회만 : 축, 격자, 빈 선 Line 셋팅
 
-		#1:좌상단 Raw Signal 그래프 셋팅
-		self.ax_whole.set_title("Whole Signal",fontsize=11,fontweight='bold')
-		self.ax_whole.set_xlabel("Time(us)", fontsize=9)
-		self.ax_whole.set_ylabel("Amplitude",fontsize=9)
+		#1 : 좌상단 Raw Signal 그래프 셋팅
+		self.ax_whole.set_title("Whole Signal",fontsize=9,fontweight='bold')
+		self.ax_whole.set_xlabel("Index", fontsize=7)
+		self.ax_whole.set_ylabel("Amplitude",fontsize=7)
 		self.ax_whole.set_ylim(-32768,32768)
-		self.ax_whole.grid(True,linestyle='--',alpha=0.6)
+		self.ax_whole.grid(True,linestyle='--',alpha=0.5)
 
 		# Line 객체 최초 단 1회 생성(고속 업데이트용 참조 보유)
-		self.line_whole_signal= self.ax_whole.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
-		self.line_whole_env=self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
-		self.ax_whole.legend(loc='upper right', fontsize=8)
+		self.line_whole_signal = self.ax_whole.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
+		self.line_whole_env = self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
+		self.ax_whole.legend(loc='upper right', fontsize = 7)
 	
-		#2:좌하단 FFT Spectrum 그래프 셋팅
-		self.ax_fft.set_title("FFT Spectrum(Frequency Domain)",fontsize=11,fontweight='bold')
-		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=9)
-		self.ax_fft.set_ylabel("Magnitude",fontsize=9)
+		#2 : 좌하단 FFT Spectrum 그래프 셋팅
+		self.ax_fft.set_title("FFT Frequency Domain",fontsize=9,fontweight='bold')
+		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=7)
+		self.ax_fft.set_ylabel("Magnitude",fontsize=7)
 		self.ax_fft.set_xlim(0,100)# 초음파 주파수 대역인 0~100MHz 범위 표시
-		self.ax_fft.grid(True,linestyle='--',alpha=0.6) 
-		self.line_whole_fft=self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
+		self.ax_fft.grid(True,linestyle='--',alpha=0.5) 
+
+		self.line_whole_fft = self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
 		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
 
-		#ROI DTAIL Chart
-		self.ax_roi.set_title("ROI (Align Zone)",fontsize=11,fontweight='bold')
-		self.ax_roi.set_xlabel('Time(us)',fontsize=9)
-		self.ax_roi.set_ylabel('Ampltitude',fontsize=9)
-		self.ax_roi.grid(True,linestyle='--',alpha=0.6)
+		#3. ROI Detail Chart
+		self.ax_roi.set_title("ROI Align Zone",fontsize=10,fontweight='bold')
+		self.ax_roi.set_xlabel('Index',fontsize=8)
+		self.ax_roi.set_ylabel('Ampltitude',fontsize=8)
+		self.ax_roi.set_ylim(-32768,32768)
+		self.ax_roi.grid(True,linestyle='--',alpha=0.5)
 
 		#ROI Line객체도 단 1회 생성 및 보관(포인터 재활용)
 		self.line_roi_signal = self.ax_roi.polt([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
 		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
-		self.ax_roi.legend(loc='upper right',fontsize=8)
-		
+		self.ax_roi.legend(loc='upper right',fontsize=6)
+
+		self.line_align_marker = self.ax_roi.axvline(x=0, color='red', linestyle=':', linewidth=1.5, visible=True)
 		self.fig.tight_layout()
 		
 	def open_csv(self):
@@ -376,7 +396,7 @@ class AScanViewerGUI:
 			return
 		try:
 			#csv 데이터 읽어오기
-			self.ascan_list, self.shared_time_us, self.shared_fft_freqs_mhz = self.csv_reader.load_file(_file_path)#자동으로 언패킹
+			self.ascan_list, self.shared_sample_indices, self.shared_fft_freqs_Mhz = self.csv_reader.load_file(_file_path)#자동으로 언패킹
 			self.total_cols = len(self.ascan_list)
 		
 			#UI 상태 업데이트(파일명 표시 및 스핀박스 범위 설정)
@@ -387,24 +407,24 @@ class AScanViewerGUI:
 			self.spin_col.insert(0,"0") #초기화
 
 			# 최적화 : Matplotlib Line에 공통 X축 단 1회 고정
-			self.line_signal.set_xdata(self.shared_time_us)
-			self.line_env.set_xdata(self.shared_time_us)
-			self.ax_signal.set_xlim(self.shared_time_us[0], self.shared_time_us[-1])	
-			self.line_fft.set_xdata(self.shared_fft_freqs_mhz)
+			self.line_whole_signal.set_xdata(self.shared_sample_indices)
+			self.line_whole_env.set_xdata(self.shared_sample_indices)
+			self.ax_whole.set_xlim(self.shared_sample_indices[0], self.shared_sample_indices[-1])	
+			self.line_whole_env.set_xdata(self.shared_fft_freqs_mhz)
 
-			#n sample -> fft y limit auto calibration
-			_est_peak = (32768.0*90.0)/ len(self.shared_time_us)
-			_dynamic_fft_ylim = math.floor(_est_peak/100.0)*100 #100 단위 내림
-			_fft_ylim_max=max(100,_dynamic_fft_ylim)# 최소 100보장
+			# FFT Y축 스케일 조절 : n sample -> fft y limit auto calibration
+			_est_peak = (32768.0 * 90.0) / len(self.shared_time_us)
+			_dynamic_fft_ylim = math.floor(_est_peak / 100.0) * 100 #100 단위 내림
+			_fft_ylim_max = max(100, _dynamic_fft_ylim - 100)# 최소 100보장
 			self.ax_fft.set_ylim(0, _fft_ylim_max)  # FFT Y축도 절대 기준으로 고정!
 	
 			#첫번째 0번 Row그래프 출력
-			self.display_ascan(col_index_in=0)
+			self.display_ascan(col_index_in = 0)
 			
 		except Exception as e:
-			messagebox.showerror("Error",f"Failed to  load CSV file:\n{str(e)}")
+			messagebox.showerror(f"Failed to  load CSV file:\n{str(e)}")
 			
-	def _on_enter_pressed(self,event_L):
+	def _on_enter_pressed(self, event_L):
 		self.on_col_change()
 		
 	def on_col_change(self):
@@ -417,10 +437,10 @@ class AScanViewerGUI:
 				self.display_ascan(col_index_in = _col_idx)
 			else:
 				messagebox.showerror("Warning",f"Index out of Range(0~{len(self.ascan_list)-1})")
-		except ValueError:
-			pass
+		except ValueError as e:
+			messagebox.showerror(e)
 			
-	def display_ascan(self,col_index_in : int):
+	def display_ascan(self, col_index_in : int):
 		self.current_ascan = self.ascan_list[col_index_in]
 		self.update_plots()
 		self.canvas.draw()
@@ -430,57 +450,65 @@ class AScanViewerGUI:
 		if self.current_ascan is not None:
 			self.update_plots()
 			self.canvas.draw()
+
+	def on_align_method_change(self):
+		self.config.align_method = self.align_method_var.get()
+
+		if self.current_ascan is not None:
+			self.update_plots()
+			self.canvas.draw()
 			
-	def update_plots(self):
+	def update_plots(self):		
 		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
 		_mode = self.view_mode_var.get()
 		_col_idx = self.current_ascan.col_index
 		
 		if _mode=='raw':
-			#Raw파형 Envelope
-			self.line_signal.set_ydata(self.current_ascan.raw_data)
-			self.line_signal.set_label("Raw Signal")
-			
-			#Raw Evnelope
-			if self.current_ascan.raw_envelope_data is not None:
-				self.line_env.set_ydata(self.current_ascan.raw_envelope_data)
-				self.line_env.set_label("Raw Envelope")
-			self.ax_signal.set_title(f"1. Raw AScan Signal (Col Index: {_col_idx})",fontsize=10,fontweight='bold')
-		
-			#Raw FFT
-			if self.current_ascan.fft_magnitude is not None:
-				self.line_fft.set_ydata(self.current_ascan.fft_magnitude)
-				self.line_fft.set_label("Raw FFT")
-				
-				peak_freq = self.current_ascan.center_freq_mhz
-				self.ax_fft.set_title(f"2. Raw FFT Spectrum : Peak {peak_freq:.2f}Mhz", fontsize=10, fontweight='bold')
-				self.line_peak_freq.set_xdata([peak_freq, peak_freq])
-
+			_sig_data = self.current_ascan.raw_data
+			_env_data = self.current_ascan.raw_envelope_data
+			_fft_data = self.current_ascan.fft_magnitude
+			_peak_freq = self.current_ascan.center_freq_Mhz
+			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8,fontweight='bold')
+			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq}Mhz")
 		else: # "filtered"
+			_sig_data = self.current_ascan.filtered_data
+			_env_data = self.current_ascan.filtered_envelope_data
+			_fft_data = self.current_ascan.filtered_fft_magnitude
+			_peak_freq = self.current_ascan.filtered_center_freq_mhz	
+			self.ax_whole.set_title(f"1.Filtered AScan Signal",fontsize=8,fontweight='bold')
+			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq}Mhz")
 
-			if self.current_ascan.filtered_data is not None:
-				self.line_signal.set_ydata(self.current_ascan.filtered_data)
-				self.line_signal.set_label("Filtered Signal")
-				
-				#filtered Evnelope
-				if self.current_ascan.filtered_envelope_data is not None:
-					self.line_env.set_ydata(self.current_ascan.filtered_envelope_data)
-					self.line_env.set_label("Filtered Envelope")
-				
-				self.ax_signal.set_title(f"1. Filtered AScan Signal (ColIndex: {_col_idx})", fontsize=10, fontweight='bold')
-				
-			#filtered FFT
-			if self.current_ascan.filtered_fft_magnitude is not None:
-				self.line_fft.set_ydata(self.current_ascan.filtered_fft_magnitude)
-				self.line_fft.set_label("Filtered FFT")
-				
-				peak_freq = self.current_ascan.filtered_center_freq_mhz
-				self.line_peak_freq.set_xdata([peak_freq,peak_freq])
-				self.ax_fft.set_title(f"2. Filtered FFT Spectrum : Peak {peak_freq:.2f}Mhz", fontsize=10, fontweight='bold')
+		#1. whole AScan 업데이트
+		self.line_whole_signal.set_ydata(_sig_data)
+		self.line_whole_env.set_ydata(_env_data)
+
+		#2. FFT
+		self.line_whole_fft.set_ydata(_fft_data)
+		self.line_peak_freq.set_xdata([_peak_freq,_peak_freq])
+
+		#3. ROI 파형 및 수직 마커 업데이트
+		align_idx = self.current_ascan.get_align_index(self.config.align_method)
+		if align_idx is None : 
+			align_idx = 0
+
+
+		start_idx = max(0, align_idx-self.config.align_pre_samples)
+		end_idx = min(len(_sig_data),align_idx + self.config.align_post_samples)
+
+		_roi_x_samples = self.shared_sample_indices[start_idx : end_idx]
+		_roi_sig = _sig_data[start_idx : end_idx]
+		_roi_env = _env_data[start_idx : end_idx]
+
+		#Line 포인터 교체
+		self.line_roi_signal.set_xdata(_roi_x_samples)
+		self.line_roi_signal.set_ydata(_roi_sig)
+
+		self.line_roi_env.set_xdata(_roi_x_samples)
+		self.line_roi_env.set_ydata(_roi_env)
 		
-		self.ax_signal.legend(loc='upper right', fontsize=8)
-		self.ax_fft.legend(loc='upper right', fontsize=8)
-				
+		self.ax_roi.set_xlim(_roi_x_samples[0], _roi_x_samples[-1])
+		self.line_align_marker.set_xdata([align_idx, align_idx])
+	
 	def run(self):
 		self.window.mainloop()
 #실행부
