@@ -79,13 +79,6 @@ class AScan:
 
 		#3. STEP4 : Align 및 600 샘플 ROI 결과 저장 변수
 		self.align_indices : AlignIndices = AlignIndices()
-	
-	@property # "메서드(함수)를 '변수(속성)'처럼 사용 : 읽기 전용(Read-Only)
-	# 사용 시 소괄호 () 없이 깔끔하게 변수처럼 접근!
-    # 사용예 : idx = ascan.current_align_index
-	def current_align_index(self)->Optional[int] : #None이 반환될 수도 있음
-		'''현재 선택된 align방법에 따라 index 반환'''
-		return self.align_indices.get(self.selected_align_method)
 
 	def get_align_index(self, method : str) -> Optional[int] : 
 		'''지정한 어라인 방식의 인덱스 반환'''
@@ -117,7 +110,7 @@ class AScan:
 			self.align_indices.cross_corr = self.align_indices.envelope_peak
 		pass
 
-	def compute_fft(self, signal: np.ndarray, fft_freqs_Mhz_in : Optional[np.ndarray]=None) -> Tuple[Optional[np.ndarray],Optional[float]]:
+	def compute_fft(self, signal: np.ndarray, fft_freqs_Mhz_in : Optional[np.ndarray]=None) -> Tuple[Optional[np.ndarray], Optional[float]]:
 		"""통일 FFT 함수 (Magnitude 배열, Center Frequency 튜플 반환)"""
 
 		n_samples = len(signal)
@@ -161,7 +154,7 @@ class AScan:
 		
 	def process_full_pipeline(self, 
 						   sampling_rate:float, 
-						   lowcut_mhz:float, highcut_mhz:float, order:int=2, 
+						   lowcut_Mhz:float, highcut_Mhz:float, order:int=2, 
 						   fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
 						   align_method:str="envelope_peak",
 						   ref_template:Optional[np.ndarray]=None):
@@ -172,7 +165,7 @@ class AScan:
 		self.raw_envelope_data = self.extract_envelope(self.raw_data)
 
 		#2. BandPass Analysis
-		self.apply_bandpass_filter(sampling_rate,lowcut_mhz,highcut_mhz,order)
+		self.apply_bandpass_filter(sampling_rate,lowcut_Mhz,highcut_Mhz,order)
 
 		#3. Filtered 파형 FFT, Envelope
 		if self.filtered_data is not None:
@@ -200,7 +193,7 @@ class CSVReader:
 			print(f"[Warning] Ref Template 로드 실패 : {e}")
 			return None
 
-	def load_file(self, file_path_in:str) -> tuple[Optional:List[AScan],Optional:np.ndarray,Optional:np.ndarray]:
+	def load_file(self, file_path_in:str) -> tuple[Optional[List[AScan]],Optional[np.ndarray],Optional[np.ndarray]]:
 		try:
 			# csv 파일 데이터, ref 파형 데이터에서 처음 1회만 실행
 			_ref_template = self.load_ref_template()
@@ -272,7 +265,7 @@ class AScanViewerGUI:
 
 		self.line_roi_signal : Optional[Line2D] = None #ROI 파형
 		self.line_roi_env : Optional[Line2D] = None #ROI 엔벨롭
-		self.align_markers : Optional[Line2D] = None #동적 수직선 마커 저장용
+		self.line_align_marker : Optional[Line2D] = None #동적 수직선 마커 저장용
 		
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
@@ -382,7 +375,7 @@ class AScanViewerGUI:
 		self.ax_roi.grid(True,linestyle='--',alpha=0.5)
 
 		#ROI Line객체도 단 1회 생성 및 보관(포인터 재활용)
-		self.line_roi_signal = self.ax_roi.polt([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
+		self.line_roi_signal = self.ax_roi.plot([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
 		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
 		self.ax_roi.legend(loc='upper right',fontsize=6)
 
@@ -410,10 +403,10 @@ class AScanViewerGUI:
 			self.line_whole_signal.set_xdata(self.shared_sample_indices)
 			self.line_whole_env.set_xdata(self.shared_sample_indices)
 			self.ax_whole.set_xlim(self.shared_sample_indices[0], self.shared_sample_indices[-1])	
-			self.line_whole_env.set_xdata(self.shared_fft_freqs_mhz)
+			self.line_whole_fft.set_xdata(self.shared_fft_freqs_Mhz)
 
 			# FFT Y축 스케일 조절 : n sample -> fft y limit auto calibration
-			_est_peak = (32768.0 * 90.0) / len(self.shared_time_us)
+			_est_peak = (32768.0 * 90.0) / len(self.shared_sample_indices)
 			_dynamic_fft_ylim = math.floor(_est_peak / 100.0) * 100 #100 단위 내림
 			_fft_ylim_max = max(100, _dynamic_fft_ylim - 100)# 최소 100보장
 			self.ax_fft.set_ylim(0, _fft_ylim_max)  # FFT Y축도 절대 기준으로 고정!
@@ -422,7 +415,7 @@ class AScanViewerGUI:
 			self.display_ascan(col_index_in = 0)
 			
 		except Exception as e:
-			messagebox.showerror(f"Failed to  load CSV file:\n{str(e)}")
+			messagebox.showerror("Error",f"Failed to  load CSV file:\n{str(e)}")
 			
 	def _on_enter_pressed(self, event_L):
 		self.on_col_change()
@@ -438,7 +431,7 @@ class AScanViewerGUI:
 			else:
 				messagebox.showerror("Warning",f"Index out of Range(0~{len(self.ascan_list)-1})")
 		except ValueError as e:
-			messagebox.showerror(e)
+			messagebox.showerror("Error", e.__str__())
 			
 	def display_ascan(self, col_index_in : int):
 		self.current_ascan = self.ascan_list[col_index_in]
@@ -474,9 +467,9 @@ class AScanViewerGUI:
 			_sig_data = self.current_ascan.filtered_data
 			_env_data = self.current_ascan.filtered_envelope_data
 			_fft_data = self.current_ascan.filtered_fft_magnitude
-			_peak_freq = self.current_ascan.filtered_center_freq_mhz	
+			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
 			self.ax_whole.set_title(f"1.Filtered AScan Signal",fontsize=8,fontweight='bold')
-			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq}Mhz")
+			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
 
 		#1. whole AScan 업데이트
 		self.line_whole_signal.set_ydata(_sig_data)
@@ -505,7 +498,7 @@ class AScanViewerGUI:
 
 		self.line_roi_env.set_xdata(_roi_x_samples)
 		self.line_roi_env.set_ydata(_roi_env)
-		
+
 		self.ax_roi.set_xlim(_roi_x_samples[0], _roi_x_samples[-1])
 		self.line_align_marker.set_xdata([align_idx, align_idx])
 	
