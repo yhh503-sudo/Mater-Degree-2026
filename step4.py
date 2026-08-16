@@ -12,6 +12,7 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 from matplotlib. lines import Line2D
+import ctypes
 
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
@@ -68,13 +69,13 @@ class AScan:
 		
 		# 1. Raw 파형 분석 결과
 		self.fft_magnitude:Optional[np.ndarray]=None #set_ydata(self.current_ascan.fft_magnitude)
-		self.center_freq_Mhz:Optional[float]=None
+		self.center_freq_Mhz : float = 0.0
 		self.raw_envelope_data:Optional[np.ndarray]=None
 		
 		#2. Filtered 파형 분석 결과
 		self.filtered_data : Optional[np.ndarray] = None
 		self.filtered_fft_magnitude : Optional[np.ndarray] = None
-		self.filtered_center_freq_Mhz : Optional[float] = None
+		self.filtered_center_freq_Mhz : float = 0.0
 		self.filtered_envelope_data : Optional[np.ndarray] = None
 
 		#3. STEP4 : Align 및 600 샘플 ROI 결과 저장 변수
@@ -115,11 +116,11 @@ class AScan:
 
 		n_samples = len(signal)
 		if n_samples==0:
-			return None, None	
+			return np.array([]), 0.0	
 
 		_fft_complex = np.fft.rfft(signal) #Real FFT(양의주파수 성분만 반환)
 		_fft_magnitude = np.abs(_fft_complex)/ n_samples
-		_center_freq_Mhz=None
+		_center_freq_Mhz = 0.0
 
 		if fft_freqs_Mhz_in is not None and len(_fft_magnitude)>0:
 			_peak_idx = np.argmax(_fft_magnitude)
@@ -215,6 +216,10 @@ class CSVReader:
 			for idx, row in df.iterrows():
 				#Nan제거 및 float 변환
 				signal_array = row.dropna().values.astype(float)
+
+				if(len(signal_array)) == 0:
+					raise ImportError("해당 Row에 맞는 data가 없습니다.")
+
 				ascan = AScan(raw_data_in=signal_array,
 					row_index_in = 0,# Row = 0 고정
 					col_index_in = int(idx))# Col = CSV 내 행 번호
@@ -238,6 +243,13 @@ class CSVReader:
 #4. AScanViewerGUI : 화면 UI 클래스
 class AScanViewerGUI:
 	def __init__(self):
+
+		#window 배율 150% 방지
+		try:
+			ctypes.windll.schore.SetProcessDpiAwareness(1)
+		except Exception : 
+			pass
+		
 		self.window = tk.Tk()
 		self.window.title("Ultrasound Signal Processor : STEP4 (Align & ROI)")
 		self.window.geometry("1280x720")
@@ -326,7 +338,7 @@ class AScanViewerGUI:
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
 		
 		#Matplotlib 도화지 Figufre 생성
-		self.fig = matplotlib.figure.Figure(figsize=(12,6), dpi=100)#액자 1200px,600px
+		self.fig = matplotlib.figure.Figure(figsize=(12,4.8), dpi=100)#액자 1200px,600px
 		gs = GridSpec(2,2, figure = self.fig, width_ratios=[1,1.2])#오른쪽열 가로폭, 왼쪽열보다 1.2배 넓게 설정
 		self.ax_whole = self.fig.add_subplot(gs[0,0])#좌상단
 		self.ax_fft = self.fig.add_subplot(gs[1,0])#좌하단
@@ -368,7 +380,7 @@ class AScanViewerGUI:
 		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
 
 		#3. ROI Detail Chart
-		self.ax_roi.set_title("ROI Align Zone",fontsize=10,fontweight='bold')
+		self.ax_roi.set_title("ROI Align",fontsize=10,fontweight='bold')
 		self.ax_roi.set_xlabel('Index',fontsize=8)
 		self.ax_roi.set_ylabel('Ampltitude',fontsize=8)
 		self.ax_roi.set_ylim(-32768,32768)
@@ -462,7 +474,7 @@ class AScanViewerGUI:
 			_fft_data = self.current_ascan.fft_magnitude
 			_peak_freq = self.current_ascan.center_freq_Mhz
 			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8,fontweight='bold')
-			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq}Mhz")
+			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
 		else: # "filtered"
 			_sig_data = self.current_ascan.filtered_data
 			_env_data = self.current_ascan.filtered_envelope_data
@@ -484,9 +496,9 @@ class AScanViewerGUI:
 		if align_idx is None : 
 			align_idx = 0
 
-
-		start_idx = max(0, align_idx-self.config.align_pre_samples)
-		end_idx = min(len(_sig_data),align_idx + self.config.align_post_samples)
+		self.ax_roi.set_title(f"ROI Align : {align_idx}")
+		start_idx = max(0, align_idx - self.config.align_pre_samples)
+		end_idx = min(len(_sig_data), align_idx + self.config.align_post_samples)
 
 		_roi_x_samples = self.shared_sample_indices[start_idx : end_idx]
 		_roi_sig = _sig_data[start_idx : end_idx]
