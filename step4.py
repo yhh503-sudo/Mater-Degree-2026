@@ -72,7 +72,7 @@ class AScan:
 		# 1. Raw 파형 분석 결과
 		self.fft_magnitude:Optional[np.ndarray]=None #set_ydata(self.current_ascan.fft_magnitude)
 		self.center_freq_Mhz : float = 0.0
-		self.raw_envelope_data:Optional[np.ndarray]=None
+		self.raw_envelope_data:Optional[np.ndarray] = None
 		
 		#2. Filtered 파형 분석 결과
 		self.filtered_data : Optional[np.ndarray] = None
@@ -220,7 +220,7 @@ class CSVReader:
 				signal_array = row.dropna().values.astype(float)
 
 				if(len(signal_array)) == 0:
-					raise ImportError("해당 Row에 맞는 data가 없습니다.")
+					raise ValueError("해당 Row에 맞는 data가 없습니다.")
 
 				ascan = AScan(raw_data_in=signal_array,
 					row_index_in = 0,# Row = 0 고정
@@ -248,7 +248,8 @@ class AScanViewerGUI:
 
 		#window 배율 150% 방지
 		try:
-			ctypes.windll.schore.SetProcessDpiAwareness(1)
+			#ctypes.windll.shcore.SetProcessDpiAwareness(1)
+			pass
 		except Exception : 
 			pass
 		
@@ -262,7 +263,9 @@ class AScanViewerGUI:
 		self.ascan_list : List[AScan] = [] #csv에서 불러온 ascan 객체들이 들어갈 리스트
 		self.current_ascan : Optional[AScan] = None #현재 화면에출력중인 Ascan객체
 		self.total_cols : int = 0
-		self.zero_padding : np.ndarray = np.zeros(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)		
+		self.roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
+		self.roi_y_signal = np.arange(self.config.align_pre_samples+self.config.align_post_samples, dtype = float)
+		self.roi_y_env = np.arange(self.config.align_pre_samples+self.config.align_post_samples, dtype = float)
 		#Align 예외 처리까지 고려한 padding
 				
 		#공통 x 축 변수 : 샘플 인덱스 배열
@@ -276,13 +279,14 @@ class AScanViewerGUI:
 		# Matplotlib Line 객체 참조 변수 (고속 데이터 업데이트용)
 		self.line_whole_signal : Optional[Line2D] = None #파형:Raw / Filtered
 		self.line_whole_env : Optional[Line2D] = None #Envelope :모두 존재
+		self.line_align_marker : Optional[Line2D] = None #동적 수직선 마커 저장용
+
 		self.line_whole_fft : Optional[Line2D] = None #FFT:모두 존재
 		self.line_peak_freq: Optional[Line2D] = None# 🎯 초록색 Peak 주파수 수직 가이드라인 추가
 
 		self.line_roi_signal : Optional[Line2D] = None #ROI 파형
 		self.line_roi_env : Optional[Line2D] = None #ROI 엔벨롭
-		self.line_align_marker : Optional[Line2D] = None #동적 수직선 마커 저장용
-
+	
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
 		
@@ -342,7 +346,7 @@ class AScanViewerGUI:
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
 		
 		#Matplotlib 도화지 Figufre 생성
-		self.fig = matplotlib.figure.Figure(figsize=(12,4.8), dpi=100)#액자 1200px,600px
+		self.fig = matplotlib.figure.Figure(figsize=(12, 4.8), dpi=100)#액자 1200px,600px
 		gs = GridSpec(2,2, figure = self.fig, width_ratios=[1,1.2])#오른쪽열 가로폭, 왼쪽열보다 1.2배 넓게 설정
 		self.ax_whole = self.fig.add_subplot(gs[0,0])#좌상단
 		self.ax_fft = self.fig.add_subplot(gs[1,0])#좌하단
@@ -367,12 +371,13 @@ class AScanViewerGUI:
 		self.ax_whole.set_ylabel("Amplitude",fontsize=7)
 		self.ax_whole.set_ylim(-32768,32768)
 		self.ax_whole.grid(True,linestyle='--',alpha=0.5)
-
+			
 		# Line 객체 최초 단 1회 생성(고속 업데이트용 참조 보유)
 		self.line_whole_signal = self.ax_whole.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
 		self.line_whole_env = self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
 		self.ax_whole.legend(loc='upper right', fontsize = 7)
-	
+		self.line_align_marker = self.ax_whole.axvline(x=0, color='black', linestyle=':', linewidth=1, visible=True)
+			
 		#2 : 좌하단 FFT Spectrum 그래프 셋팅
 		self.ax_fft.set_title("FFT Frequency Domain",fontsize=9,fontweight='bold')
 		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=7)
@@ -389,13 +394,13 @@ class AScanViewerGUI:
 		self.ax_roi.set_ylabel('Ampltitude',fontsize=8)
 		self.ax_roi.set_ylim(-32768,32768)
 		self.ax_roi.grid(True,linestyle='--',alpha=0.5)
+		self.ax_roi.set_xlim(-self.config.align_pre_samples,self.config.align_post_samples)
 
 		#ROI Line객체도 단 1회 생성 및 보관(포인터 재활용)
 		self.line_roi_signal = self.ax_roi.plot([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
 		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
 		self.ax_roi.legend(loc='upper right',fontsize=6)
 
-		self.line_align_marker = self.ax_roi.axvline(x=0, color='red', linestyle=':', linewidth=1.5, visible=True)
 		self.fig.tight_layout()
 		
 	def open_csv(self):
@@ -467,35 +472,24 @@ class AScanViewerGUI:
 			self.update_plots()
 			self.canvas.draw()
 
-	def make_roi(len_signal_data : int, pre_sample : int, post_sample : int, align_idx : int) -> Tuple[int, int] :
+	def update_roi_buffer(self, signal : np.ndarray, env : np.ndarray, align_idx:int) :
+		'''기존 buffer를 그대로 재사용'''
+		#초기화
+		self.roi_y_signal[:] = 0.0
+		self.roi_y_env[:]  = 0.0
 
-		total_len = len_signal_data # 6000개
-		target_len = pre_sample + post_sample #100+400 = 500개
+		raw_start = align_idx - self.config.align_pre_samples
+		raw_end = align_idx + self.config.align_post_samples
 
-		#고정 크기 0배열 생성
-		small_roi_data = np.zeros(target_len, dtype = signal_data.dtype)
+		sig_start = max(0, raw_start)
+		sig_end = min(len(signal), raw_end)
 
-		#이상적 좌표 범위
-		ideal_raw_start = align_idx - pre_sample
-		#case = 50 / 150 / 5900 => -50 / 50 / 5800	
-		ideal_raw_end = align_idx + post_sample
-		#case = 50 / 150 / 5900 => 450 / 550 / 6300	
-		
-		#실제 좌표 범위
-		long_sig_start = max(0, ideal_raw_start)
-		#case = 0 / 50 / 5800
-		long_sig_end = min(total_len, ideal_raw_end)
-		#case = 450 / 550 / 6000
+		roi_start = sig_start - raw_start #항상 0 이상
+		roi_end = roi_start + (sig_end - sig_start)
 
-		#고정 크기 roi_data 배열에 들어갈 타겟 인덱스 계산
-		real_roi_start = long_sig_start - ideal_raw_start #case= 50/0/0 : 무조건 0 이상이됨
-		real_roi_end = real_roi_start + (long_sig_end - long_sig_start)#case=500/500/200
-
-		#유효 데이터 복사 (경계 밖은 0으로 유지)
-		small_roi_data[real_roi_start : real_roi_end] = sig_data[long_sig_start : long_sig_end] #50~500/0~500/0~200
-		#0~450/50~550/5800~6000
-		return small_roi_data
-			
+		self.roi_y_signal[roi_start:roi_end] = signal[sig_start:sig_end]	
+		self.roi_y_env[roi_start:roi_end] = env[sig_start:sig_end]
+					
 	def update_plots(self):		
 		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
 		_mode = self.view_mode_var.get()
@@ -519,36 +513,32 @@ class AScanViewerGUI:
 		#1. whole AScan 업데이트
 		self.line_whole_signal.set_ydata(_sig_data)
 		self.line_whole_env.set_ydata(_env_data)
+		
 
 		#2. FFT
 		self.line_whole_fft.set_ydata(_fft_data)
 		self.line_peak_freq.set_xdata([_peak_freq,_peak_freq])
 
-		#3. ROI 파형 및 수직 마커 업데이트
+	
 		align_idx = self.current_ascan.get_align_index(self.config.align_method)
+		if align_idx == None : 
+			align_idx = 0
+			self.ax_roi.set_title(f"ROI Align : {None}")
+		else :
+			self.ax_roi.set_title(f"ROI Align : {align_idx}")
 
-		#
-		self.make_roi()
+		self.line_align_marker.set_xdata([align_idx, align_idx])
 
-
-		self.ax_roi.set_title(f"ROI Align : {align_idx}")
-		_roi_x_samples = self.shared_sample_indices[start_idx : end_idx]
-		_roi_sig = _sig_data[start_idx : end_idx]
-		_roi_env = _env_data[start_idx : end_idx]
+		#3. ROI 파형 및 수직 마커 업데이트
+		self.update_roi_buffer(_sig_data,_env_data, align_idx)
 
 		#Line 포인터 교체
-		self.line_roi_signal.set_xdata(_roi_x_samples)
-		self.line_roi_signal.set_ydata(_roi_sig)
+		self.line_roi_signal.set_xdata(self.roi_x)
+		self.line_roi_signal.set_ydata(self.roi_y_signal)
 
-		self.line_roi_env.set_xdata(_roi_x_samples)
-		self.line_roi_env.set_ydata(_roi_env)
+		self.line_roi_env.set_xdata(self.roi_x)
+		self.line_roi_env.set_ydata(self.roi_y_env)
 
-		#초기화
-		small_roi_data.fill(0)
-
-		self.ax_roi.set_xlim(_roi_x_samples[0], _roi_x_samples[-1])
-		self.line_align_marker.set_xdata([align_idx, align_idx])
-	
 	def run(self):
 		self.window.mainloop()
 #실행부
