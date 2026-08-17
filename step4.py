@@ -32,7 +32,7 @@ class ExperimentConfig :
 	#step4 : Align Mathod
 	align_method : str = "envelope_peak" # "pos_max", "neg_min", "cross_corr", "envelope_peak"
 	align_pre_samples : int = 100    #align 기준점 이전 샘플 개수
-	align_post_samples: int = 400   #align 기준점 이후 샘플 개수
+	align_post_samples: int = 500   #align 기준점 이후 샘플 개수
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
@@ -83,6 +83,10 @@ class AScan:
 		#3. STEP4 : Align 및 600 샘플 ROI 결과 저장 변수
 		self.align_indices : AlignIndices = AlignIndices()
 
+		#4. STEP4-2 : Phase Inversion
+		self.phase_inverse : Optional[int] = None
+		
+
 	def get_align_index(self, method : str) -> Optional[int] : 
 		'''지정한 어라인 방식의 인덱스 반환'''
 		return self.align_indices.get(method)
@@ -97,7 +101,6 @@ class AScan:
 			return	
 		target_signal = self.filtered_data
 		target_envelope = self.filtered_envelope_data
-
 		#1. Envelope Peak
 		self.align_indices.envelope_peak = int(np.argmax(target_envelope))
 		#np.argmax(target_env)"가장 큰 피크가 있는 샘플의 위치 번호"를 반환int : "NumPy 전용 정수(np.int64)를 순수 파이썬 정수(int)로 바꿔서 __slots__에 깔끔하고 안전하게 저장하기 위함"
@@ -105,10 +108,33 @@ class AScan:
 		self.align_indices.pos_max = int(np.argmax(target_signal))
 		#3. Negative Min
 		self.align_indices.neg_min = int(np.argmin(target_signal))
-		#4. Cross Correlation (Pattern Matching
+		#4. Cross Correlation (Pattern Matching		
 		if ref_template is not None :
 			_corr = np.correlate(target_signal, ref_template, mode = 'same')
-			self.align_indices.cross_corr = int(np.argmax(_corr))
+			pos_idx = int(np.argmax(_corr))
+			pos_val = _corr[pos_idx]
+			self.align_indices.cross_corr = pos_idx
+			#메인 파형 영향권을 벗어난 100~+500 구간 정의
+			search_start = pos_idx + 100
+			search_end = min(pos_idx + 500, len(_corr))
+			if search_start < search_end:	
+				#ROI  구간
+				_roi_corr = _corr[search_start:search_end]
+				_roi_neg_realtive_idx = int(np.argmin(_roi_corr))
+				_roi_neg_idx = search_start + _roi_neg_realtive_idx
+				_abs_roi_neg_val = abs(_corr[_roi_neg_idx])
+
+				roi_pos_relative_idx = int(np.argmax(_roi_corr))
+				roi_pos_idx = search_start + roi_pos_relative_idx
+				roi_pos_val = _corr[roi_pos_idx]
+
+				_cond1 = _abs_roi_neg_val > roi_pos_val * 1
+				_cond2 = _abs_roi_neg_val > pos_val * 0.15
+
+				#반사파 구간에서 음의 피크가 양의 피크보다 우세할 경우, Phase Inverse
+				if _cond1  and _cond2 :
+					self.phase_inverse = _roi_neg_idx
+
 		else: #템플릿이 없으면, 기본적으로 envelope_peak 결과를 대입
 			self.align_indices.cross_corr = self.align_indices.envelope_peak
 		pass
@@ -377,6 +403,7 @@ class AScanViewerGUI:
 		self.line_whole_env = self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
 		self.ax_whole.legend(loc='upper right', fontsize = 7)
 		self.line_align_marker = self.ax_whole.axvline(x=0, color='black', linestyle=':', linewidth=1, visible=True)
+		self.line_inverse_marker = self.ax_whole.axvline(x=0, color='purple', linestyle=':', linewidth=1, visible=False)
 			
 		#2 : 좌하단 FFT Spectrum 그래프 셋팅
 		self.ax_fft.set_title("FFT Frequency Domain",fontsize=9,fontweight='bold')
@@ -521,11 +548,18 @@ class AScanViewerGUI:
 
 	
 		align_idx = self.current_ascan.get_align_index(self.config.align_method)
+
 		if align_idx == None : 
 			align_idx = 0
 			self.ax_roi.set_title(f"ROI Align : {None}")
 		else :
-			self.ax_roi.set_title(f"ROI Align : {align_idx}")
+			if self.current_ascan.phase_inverse!=None :
+				self.line_inverse_marker.set_xdata([self.current_ascan.phase_inverse,self.current_ascan.phase_inverse])
+				self.line_inverse_marker.set_visible(True)
+				self.ax_roi.set_title(f"ROI Align {align_idx}, Inverse {self.current_ascan.phase_inverse}")
+			else:
+				self.line_inverse_marker.set_visible(False)
+				self.ax_roi.set_title(f"ROI Align {align_idx}")
 
 		self.line_align_marker.set_xdata([align_idx, align_idx])
 
