@@ -37,6 +37,8 @@ class ExperimentConfig :
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
 
+	#A Beam의 샘플 갯수
+	number_of_samples_in_Abeam : int = 0
 
 class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
 	__slots__ = ('envelope_peak', 'pos_max', 'neg_min', 'cross_corr') #변수이름의 키
@@ -202,12 +204,12 @@ class CSVReader:
 			df = pd.read_csv(file_path_in,header=None)
 			#파일 로드 시점 : 첫번째 Row 기반으로 공통 시간/주파수축 1회만 생성
 			_first_row = df.iloc[0].dropna().values.astype(float)
-			_n_samples=len(_first_row)
-
+			self.config.number_of_samples_in_Abeam = len(_first_row)
+		
 			#sample index : x축 공통
-			_shared_sample_indices = np.arange(_n_samples, dtype = int)
+			_shared_sample_indices = np.arange(self.config.number_of_samples_in_Abeam, dtype = int)
 			_time_distance = 1.0 / self.config.sampling_rate
-			_freqs_hz = np.fft.rfftfreq(_n_samples, d = _time_distance)
+			_freqs_hz = np.fft.rfftfreq(self.config.number_of_samples_in_Abeam, d = _time_distance)
 			#Real FFT 실행했을 때 각 주파수 성분이 몇 Hz(헤르츠)인지 물리적 주파수 축을 계산해 주는 NumPy 함수
 			#Hz보다 MHz 표기가 훨씬 직관적이기 때문
 			_shared_fft_freqs_Mhz = _freqs_hz/ 1e6
@@ -260,11 +262,13 @@ class AScanViewerGUI:
 		self.ascan_list : List[AScan] = [] #csv에서 불러온 ascan 객체들이 들어갈 리스트
 		self.current_ascan : Optional[AScan] = None #현재 화면에출력중인 Ascan객체
 		self.total_cols : int = 0
-		
+		self.zero_padding : np.ndarray = np.zeros(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)		
+		#Align 예외 처리까지 고려한 padding
+				
 		#공통 x 축 변수 : 샘플 인덱스 배열
 		self.shared_sample_indices : Optional[np.ndarray] = None
 		self.shared_fft_freqs_Mhz:Optional[np.ndarray]=None
-		
+
 		#UI 컨트롤 변수들 : 뷰 모드 선택 : 라디오 변수(raw/filtered), Align
 		self.view_mode_var = tk.StringVar(value="raw")
 		self.align_method_var = tk.StringVar(value = self.config.align_method)
@@ -278,7 +282,7 @@ class AScanViewerGUI:
 		self.line_roi_signal : Optional[Line2D] = None #ROI 파형
 		self.line_roi_env : Optional[Line2D] = None #ROI 엔벨롭
 		self.line_align_marker : Optional[Line2D] = None #동적 수직선 마커 저장용
-		
+
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
 		
@@ -462,6 +466,35 @@ class AScanViewerGUI:
 		if self.current_ascan is not None:
 			self.update_plots()
 			self.canvas.draw()
+
+	def make_roi(len_signal_data : int, pre_sample : int, post_sample : int, align_idx : int) -> Tuple[int, int] :
+
+		total_len = len_signal_data # 6000개
+		target_len = pre_sample + post_sample #100+400 = 500개
+
+		#고정 크기 0배열 생성
+		small_roi_data = np.zeros(target_len, dtype = signal_data.dtype)
+
+		#이상적 좌표 범위
+		ideal_raw_start = align_idx - pre_sample
+		#case = 50 / 150 / 5900 => -50 / 50 / 5800	
+		ideal_raw_end = align_idx + post_sample
+		#case = 50 / 150 / 5900 => 450 / 550 / 6300	
+		
+		#실제 좌표 범위
+		long_sig_start = max(0, ideal_raw_start)
+		#case = 0 / 50 / 5800
+		long_sig_end = min(total_len, ideal_raw_end)
+		#case = 450 / 550 / 6000
+
+		#고정 크기 roi_data 배열에 들어갈 타겟 인덱스 계산
+		real_roi_start = long_sig_start - ideal_raw_start #case= 50/0/0 : 무조건 0 이상이됨
+		real_roi_end = real_roi_start + (long_sig_end - long_sig_start)#case=500/500/200
+
+		#유효 데이터 복사 (경계 밖은 0으로 유지)
+		small_roi_data[real_roi_start : real_roi_end] = sig_data[long_sig_start : long_sig_end] #50~500/0~500/0~200
+		#0~450/50~550/5800~6000
+		return small_roi_data
 			
 	def update_plots(self):		
 		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
@@ -473,14 +506,14 @@ class AScanViewerGUI:
 			_env_data = self.current_ascan.raw_envelope_data
 			_fft_data = self.current_ascan.fft_magnitude
 			_peak_freq = self.current_ascan.center_freq_Mhz
-			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8,fontweight='bold')
+			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
 			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
 		else: # "filtered"
 			_sig_data = self.current_ascan.filtered_data
 			_env_data = self.current_ascan.filtered_envelope_data
 			_fft_data = self.current_ascan.filtered_fft_magnitude
 			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
-			self.ax_whole.set_title(f"1.Filtered AScan Signal",fontsize=8,fontweight='bold')
+			self.ax_whole.set_title(f"1.Filtered AScan Signal",fontsize=8, fontweight='bold')
 			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
 
 		#1. whole AScan 업데이트
@@ -493,13 +526,12 @@ class AScanViewerGUI:
 
 		#3. ROI 파형 및 수직 마커 업데이트
 		align_idx = self.current_ascan.get_align_index(self.config.align_method)
-		if align_idx is None : 
-			align_idx = 0
+
+		#
+		self.make_roi()
+
 
 		self.ax_roi.set_title(f"ROI Align : {align_idx}")
-		start_idx = max(0, align_idx - self.config.align_pre_samples)
-		end_idx = min(len(_sig_data), align_idx + self.config.align_post_samples)
-
 		_roi_x_samples = self.shared_sample_indices[start_idx : end_idx]
 		_roi_sig = _sig_data[start_idx : end_idx]
 		_roi_env = _env_data[start_idx : end_idx]
@@ -510,6 +542,9 @@ class AScanViewerGUI:
 
 		self.line_roi_env.set_xdata(_roi_x_samples)
 		self.line_roi_env.set_ydata(_roi_env)
+
+		#초기화
+		small_roi_data.fill(0)
 
 		self.ax_roi.set_xlim(_roi_x_samples[0], _roi_x_samples[-1])
 		self.line_align_marker.set_xdata([align_idx, align_idx])
