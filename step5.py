@@ -34,6 +34,11 @@ class ExperimentConfig :
 	align_pre_samples : int = 100    #align 기준점 이전 샘플 개수
 	align_post_samples: int = 500   #align 기준점 이후 샘플 개수
 
+	#step5-1 : TGC
+	tgc_enable : bool = False
+	tgc_start_sample_from_align : int = 0
+	tgc_slope_dB : float = 0.1 #샘플당 증폭개인(dB/Sample)
+
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
 
@@ -85,7 +90,10 @@ class AScan:
 
 		#4. STEP4-2 : Phase Inversion
 		self.phase_inverse : Optional[int] = None
-		
+
+		#5. Step5-1 : TGC
+		self.tgc_data : Optional[np.ndarray] = None
+		self.tgc_envelope_data : Optional[np.ndarray] = None
 
 	def get_align_index(self, method : str) -> Optional[int] : 
 		'''지정한 어라인 방식의 인덱스 반환'''
@@ -94,6 +102,25 @@ class AScan:
 	# ==========================================
     # 🎯 독립된 개별 신호 처리 메서드 모음
     # ==========================================	
+
+	def apply_tgc(self, start_sample : int = 0, slope_dB : float = 0.005):
+		#단순 선형 깊이 감쇄 보정 함수
+
+		if self.filtered_data is None:
+			return
+
+		n_samples = len(self.filtered_data)
+		indices = np.arange(n_samples)
+
+		#start_sample 이후부터 거리 비례 dB 증폭 적용
+		depth_offset = np.maxmimum(0, indices - start_sample)
+		gain_dB = depth_offset * slope_dB
+		gain_linear = 10.0 ** (gain_dB/20.0) #dB스케일을 선형 스케일로 변환
+
+		#TGC 반영된 ndarray 데이터 생성 및 Envelope 계산
+		self.tgc_data = self.filtered_data * gain_linear
+		self.tgc_envelope_data = self.extract_envelope(self.tgc_data)
+
 
 	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None):
 		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
@@ -186,7 +213,10 @@ class AScan:
 						   lowcut_Mhz:float, highcut_Mhz:float, order:int=2, 
 						   fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
 						   align_method:str="envelope_peak",
-						   ref_template:Optional[np.ndarray]=None):
+						   ref_template:Optional[np.ndarray]=None,
+						   tgc_enable : bool = True,
+						   tgc_start_sample : int = 0,
+						   tgc_slope_dB : float = 0.005):
 		#최초 1회 사전 계산
 
 		#1. Raw Analysis 
@@ -203,6 +233,12 @@ class AScan:
 
 		#4. Align
 		self.compute_all_align_indices(ref_template = ref_template)
+
+		#5. TGC 보정 적용 : Filtered 신호 기반
+		if tgc_enable : 
+			self.apply_tgc(start_sample = tgc_start_sample, slope_dB = tgc_slope_dB)
+
+
 		
 #CSV 파일 로더 클래스
 class CSVReader:
@@ -257,7 +293,10 @@ class CSVReader:
 					highcut_Mhz = self.config.filter_highcut_Mhz,
 					order = self.config.filter_order,
 					fft_freqs_Mhz_in = _shared_fft_freqs_Mhz,
-					ref_template = _ref_template)
+					ref_template = _ref_template,
+					tgc_enable = self.config.tgc_enable,
+					tgc_start_sample= self.config.tgc_start_sample_from_align,
+					tgc_slope_dB=self.config.tgc_slope_dB)
 				ascan_list.append(ascan)
 
 			if len(ascan_list)==0:
@@ -339,21 +378,22 @@ class AScanViewerGUI:
 		self.spin_col.bind("<Return>", self._on_enter_pressed)
 		
 		#좌상단 3열 : 토글 (Raw View vs Filtered View)
-		ttk.Label(_control_frame, text="Display Mode:").grid(row=0,column=4,padx=(15,5),pady=2)
+		ttk.Label(_control_frame, text="Display Mode:").grid(row=1,column=0,padx=(15,5),pady=2)
 		_low_Mhz, _high_Mhz=int(self.config.filter_lowcut_Mhz),int(self.config.filter_highcut_Mhz)
 		_filtered_btn_text = f"Filtered {_low_Mhz}-{_high_Mhz}Mhz"
-		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable= self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=0,column=5,padx=3,pady=2)
-		ttk.Radiobutton(_control_frame,text="Raw Data", variable= self.view_mode_var,  value="raw",command=self.on_view_mode_change).grid(row=0,column=6,padx=3,pady=2)
+		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable= self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=1,column=1,padx=3,pady=2)
+		ttk.Radiobutton(_control_frame,text="Raw Data", variable= self.view_mode_var,  value="raw", command=self.on_view_mode_change).grid(row=1,column=2,padx=3,pady=2)
+		ttk.Radiobutton(_control_frame,text="TGC Signal", variable=self.view_mode_var, value="tgc", command=self.on_view_mode_change).grid(row=1,column=3,padx=3,pady=2)
 
 		#좌상단 4열 : align 라디오 버튼 4종
-		ttk.Separator(_control_frame, orient='vertical').grid(row=0,column=7,rowspan=2,sticky="ns",padx=15) #구간 나누기
-		ttk.Label(_control_frame, text="Align Method:",font=("Segoe UI",9,"bold")).grid(row=0,column=8,rowspan=2,padx=(0,5),pady=2)
+		ttk.Separator(_control_frame, orient='vertical').grid(row=0,column=4,rowspan=2,sticky="ns",padx=15) #구간 나누기
+		ttk.Label(_control_frame, text="Align Method:",font=("Segoe UI",9,"bold")).grid(row=0,column=5,rowspan=2,padx=(0,5),pady=2)
 
 		align_methods=[
-			("Envelope Peak","envelope_peak",0,9),
-			("Pos Max","pos_max",0,10),
-			("Neg Min","neg_min",1,9),
-			("Cross corr","cross_corr",1,10),
+			("Envelope Peak","envelope_peak",0,6),
+			("Pos Max","pos_max",0,7),
+			("Neg Min","neg_min",1,6),
+			("Cross corr","cross_corr",1,7),
 		]
 
 		for text, val, r, c in align_methods:
@@ -363,7 +403,7 @@ class AScanViewerGUI:
 				text=text,
 				value=val,
 				command=self.on_align_method_change
-			).grid(row=r, column=c, padx=5, pady=2, sticky='w')#좌측정렬
+			).grid(row=r, column=c, padx=6, pady=2, sticky='w')#좌측정렬
 
 		#-------------------------------------
 		# 하단  그래프 출력 영역 plot panel
@@ -420,7 +460,7 @@ class AScanViewerGUI:
 		self.ax_roi.set_xlabel('Index',fontsize=8)
 		self.ax_roi.set_ylabel('Ampltitude',fontsize=8)
 		self.ax_roi.set_ylim(-32768,32768)
-		self.ax_roi.grid(True,linestyle='--',alpha=0.5)
+		self.ax_roi.grid(True, linestyle='--', alpha=0.5)
 		self.ax_roi.set_xlim(-self.config.align_pre_samples,self.config.align_post_samples)
 
 		#ROI Line객체도 단 1회 생성 및 보관(포인터 재활용)
@@ -444,7 +484,7 @@ class AScanViewerGUI:
 			_filename= _file_path.split("/")[-1] #마지막 원소
 			self.lbl_status.config(text=f"Loaded:{_filename}({self.total_cols} cols)",foreground="green")
 			self.spin_col.config(from_=0, to = self.total_cols - 1)#규칙바꾸기
-			self.spin_col.delete(0,tk.END)#기존 스핀박스 남아있던 이전번호(예:150) 지우는역할
+			self.spin_col.delete(0, tk.END)#기존 스핀박스 남아있던 이전번호(예:150) 지우는역할
 			self.spin_col.insert(0,"0") #초기화
 
 			# 최적화 : Matplotlib Line에 공통 X축 단 1회 고정
@@ -522,13 +562,22 @@ class AScanViewerGUI:
 		_mode = self.view_mode_var.get()
 		_col_idx = self.current_ascan.col_index
 		
-		if _mode=='raw':
+		if _mode == 'raw':
 			_sig_data = self.current_ascan.raw_data
 			_env_data = self.current_ascan.raw_envelope_data
 			_fft_data = self.current_ascan.fft_magnitude
 			_peak_freq = self.current_ascan.center_freq_Mhz
 			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
 			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
+
+		elif _mode == 'tgc':
+			_sig_data = self.current_ascan.tgc_data
+			_env_data = self.current_ascan.tgc_envelope_data
+			_fft_data = self.current_ascan.filtered_fft_magnitude
+			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
+			self.ax_whole.set_title(f"1. Filtered TGC AScan Signal",fontsize=8, fontweight='bold')
+			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
+
 		else: # "filtered"
 			_sig_data = self.current_ascan.filtered_data
 			_env_data = self.current_ascan.filtered_envelope_data
@@ -541,11 +590,9 @@ class AScanViewerGUI:
 		self.line_whole_signal.set_ydata(_sig_data)
 		self.line_whole_env.set_ydata(_env_data)
 		
-
 		#2. FFT
 		self.line_whole_fft.set_ydata(_fft_data)
 		self.line_peak_freq.set_xdata([_peak_freq,_peak_freq])
-
 	
 		align_idx = self.current_ascan.get_align_index(self.config.align_method)
 
