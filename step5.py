@@ -35,9 +35,9 @@ class ExperimentConfig :
 	align_post_samples: int = 500   #align 기준점 이후 샘플 개수
 
 	#step5-1 : TGC
-	tgc_enable : bool = False
-	tgc_start_sample_from_align : int = 0
-	tgc_slope_dB : float = 0.1 #샘플당 증폭개인(dB/Sample)
+	tgc_enable : bool = True
+	tgc_start_sample_from_align : int = 40
+	tgc_slope_dB : float = 0.001 #샘플당 증폭개인(dB/Sample)
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
@@ -108,13 +108,23 @@ class AScan:
 
 		if self.filtered_data is None:
 			return
-
+		# 2. 전체 샘플 개수를 구하고, [0, 1, 2, ..., N-1] 인덱스 배열 생성
 		n_samples = len(self.filtered_data)
 		indices = np.arange(n_samples)
 
-		#start_sample 이후부터 거리 비례 dB 증폭 적용
-		depth_offset = np.maxmimum(0, indices - start_sample)
-		gain_dB = depth_offset * slope_dB
+		#3. start_sample 이전은 0, 이후부터는 1씩 증가하는 깊이(거리) 오프셋 계산
+		depth_offset_array = np.maximum(0, indices - start_sample) 
+
+		#start_sample = 3
+		#indices = np.array([0, 1, 2, 3, 4, 5])
+		# 1. 단순히 빼기만 했을 때:
+		# [0-3, 1-3, 2-3, 3-3, 4-3, 5-3] -> [-3, -2, -1, 0, 1, 2]
+		## 결과: [0, 0, 0, 0, 1, 2]
+
+		#4. 깊이에 비례하여 증가하는 dB 단위의 가인 계산
+		gain_dB = depth_offset_array * slope_dB
+
+		# 5. dB 스케일을 실제 신호에 곱할 수 있는 선형(Linear) 배율로 변환 (지수 함수)
 		gain_linear = 10.0 ** (gain_dB/20.0) #dB스케일을 선형 스케일로 변환
 
 		#TGC 반영된 ndarray 데이터 생성 및 Envelope 계산
