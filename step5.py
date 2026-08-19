@@ -18,7 +18,7 @@ import ctypes
 from scipy.signal import butter, hilbert, filtfilt
 
 # 실험 장비 및 환경 설정 관리 클래스
-@dataclass
+@dataclass(slots=True)
 class ExperimentConfig :
 	sampling_rate:float = 1e9 #샘플링 속도(기본: 1 GHz = 1,000,000,000 Hz)
 	probe_center_freq:float=45e6 #(기본: 45 MHz)
@@ -33,17 +33,18 @@ class ExperimentConfig :
 	align_method : str = "envelope_peak" # "pos_max", "neg_min", "cross_corr", "envelope_peak"
 	align_pre_samples : int = 100    #align 기준점 이전 샘플 개수
 	align_post_samples: int = 500   #align 기준점 이후 샘플 개수
+	align_ROI_samples : int = 600 #ROI 샘플 갯수
 
 	#step5-1 : TGC
 	tgc_enable : bool = False
 	tgc_start_sample_from_align : int = 0
-	tgc_slope_dB : float = 0.1 #샘플당 증폭개인(dB/Sample)
+	tgc_slope_dB : float = 0.01 #샘플당 증폭개인(dB/Sample)
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
 
 	#A Beam의 샘플 갯수
-	number_of_samples_in_Abeam : int = 0
+	number_of_samples_in_Whole_Abeam : int = 0
 
 class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
 	__slots__ = ('envelope_peak', 'pos_max', 'neg_min', 'cross_corr') #변수이름의 키
@@ -77,7 +78,7 @@ class AScan:
 		# 1. Raw 파형 분석 결과
 		self.fft_magnitude:Optional[np.ndarray]=None #set_ydata(self.current_ascan.fft_magnitude)
 		self.center_freq_Mhz : float = 0.0
-		self.raw_envelope_data:Optional[np.ndarray] = None
+		#self.raw_envelope_data:Optional[np.ndarray] = None
 		
 		#2. Filtered 파형 분석 결과
 		self.filtered_data : Optional[np.ndarray] = None
@@ -92,8 +93,17 @@ class AScan:
 		self.phase_inverse : Optional[int] = None
 
 		#5. Step5-1 : TGC
-		self.tgc_data : Optional[np.ndarray] = None
-		self.tgc_envelope_data : Optional[np.ndarray] = None
+		
+		self.tgc_ROI_Max : Optional[np.ndarray] = None
+		self.tgc_ROI_min : Optional[np.ndarray] = None
+		self.tgc_ROI_Corr : Optional[np.ndarray] = None
+		self.tgc_ROI_Envelope : Optional[np.ndarray] = None
+
+		#5. Step5-3 : Envelope
+		self.env_tgc_ROI_Max : Optional[np.ndarray] = None
+		self.env_tgc_ROI_min : Optional[np.ndarray] = None
+		self.env_tgc_ROI_Corr : Optional[np.ndarray] = None
+		self.env_tgc_ROI_Envelope : Optional[np.ndarray] = None
 
 	def get_align_index(self, method : str) -> Optional[int] : 
 		'''지정한 어라인 방식의 인덱스 반환'''
@@ -116,6 +126,14 @@ class AScan:
 		depth_offset = np.maxmimum(0, indices - start_sample)
 		gain_dB = depth_offset * slope_dB
 		gain_linear = 10.0 ** (gain_dB/20.0) #dB스케일을 선형 스케일로 변환
+
+		#TGC 반영된 ndarray 데이터 생성 및 Envelope 계산
+		self.tgc_data = self.filtered_data * gain_linear
+		self.tgc_envelope_data = self.extract_envelope(self.tgc_data)
+
+
+	def apply_tgc_all(self, tgc_gain_ndarray : np.ndarray):
+		#단순 선형 깊이 감쇄 보정 함수
 
 		#TGC 반영된 ndarray 데이터 생성 및 Envelope 계산
 		self.tgc_data = self.filtered_data * gain_linear
@@ -207,6 +225,30 @@ class AScan:
 			return None
 		_analytic_signal = hilbert(signal)
 		return np.abs(_analytic_signal)
+
+	def Make_roi_buffer(self, signal : np.ndarray, Align_Indices : AlignIndices, numbers_ROI : int) :
+		'''기존 buffer를 그대로 재사용'''
+
+		self.tgc_ROI_Max = np.zeros(numbers_ROI)
+		self.tgc_ROI_min = np.zeros(numbers_ROI)
+		self.tgc_ROI_Corr  = np.zeros(numbers_ROI)
+		self.tgc_ROI_Envelope = np.zeros(numbers_ROI)
+		
+		#초기화
+		self.roi_y_signal[:] = 0.0
+		self.roi_y_env[:]  = 0.0
+
+		raw_start = align_idx - self.config.align_pre_samples
+		raw_end = align_idx + self.config.align_post_samples
+
+		sig_start = max(0, raw_start)
+		sig_end = min(len(signal), raw_end)
+
+		roi_start = sig_start - raw_start #항상 0 이상
+		roi_end = roi_start + (sig_end - sig_start)
+
+		self.roi_y_signal[roi_start:roi_end] = signal[sig_start:sig_end]	
+		self.roi_y_env[roi_start:roi_end] = env[sig_start:sig_end]
 		
 	def process_full_pipeline(self, 
 						   sampling_rate:float, 
@@ -221,7 +263,7 @@ class AScan:
 
 		#1. Raw Analysis 
 		self.fft_magnitude, self.center_freq_Mhz = self.compute_fft(self.raw_data, fft_freqs_Mhz_in)
-		self.raw_envelope_data = self.extract_envelope(self.raw_data)
+		#self.raw_envelope_data = self.extract_envelope(self.raw_data)
 
 		#2. BandPass Analysis
 		self.apply_bandpass_filter(sampling_rate,lowcut_Mhz,highcut_Mhz,order)
@@ -239,12 +281,56 @@ class AScan:
 			self.apply_tgc(start_sample = tgc_start_sample, slope_dB = tgc_slope_dB)
 
 
+	def process_full_pipeline(self, 
+						   sampling_rate:float, 
+						   lowcut_Mhz:float, highcut_Mhz:float, order:int=2, 
+						   fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
+						   align_method:str="envelope_peak",
+						   ref_template:Optional[np.ndarray]=None,
+						   tgc_gain_ndarray :Optional[np.ndarray]=None):
+		#최초 1회 사전 계산
+
+		#1. Raw Analysis 
+		self.fft_magnitude, self.center_freq_Mhz = self.compute_fft(self.raw_data, fft_freqs_Mhz_in)
+		#self.raw_envelope_data = self.extract_envelope(self.raw_data)
+
+		#2. BandPass Analysis
+		self.apply_bandpass_filter(sampling_rate,lowcut_Mhz,highcut_Mhz,order)
+
+		#3. Filtered 파형 FFT, Envelope
+		if self.filtered_data is not None:
+			self.filtered_fft_magnitude, self.filtered_center_freq_Mhz = self.compute_fft(self.filtered_data, fft_freqs_Mhz_in)
+			self.filtered_envelope_data = self.extract_envelope(self.filtered_data)
+
+		#4. Align
+		self.compute_all_align_indices(ref_template = ref_template)
+
+		#5. TGC 보정 적용 : Filtered 신호 기반	 
+		self.apply_tgc_all(tgc_gain_ndarray = tgc_gain_ndarray)
+
+
 		
 #CSV 파일 로더 클래스
 class CSVReader:
 	#csv 파일 읽어서, AScan객체 리스트 생성
 	def __init__(self, config_in : ExperimentConfig):
 		self.config = config_in
+		self.gain_linear_ROI : Optional[np.ndarray] = None
+
+	def tgc_set(self):
+		#단순 선형 깊이 감쇄 보정 함수
+
+		indices = np.arange(self.config.align_ROI_samples)
+
+		#start_sample 이후부터 거리 비례 dB 증폭 적용
+		depth_offset = np.maxmimum(0, indices - self.config.tgc_start_sample_from_align)
+		gain_dB = depth_offset * self.config.tgc_slope_dB
+		gain_linear = 10.0 ** (gain_dB/20.0) #dB스케일을 선형 스케일로 변환
+
+		#TGC 반영된 ndarray 데이터 생성 및 Envelope 계산
+		self.tgc_data = self.filtered_data * gain_linear
+		self.tgc_envelope_data = self.extract_envelope(self.tgc_data)
+
 
 	def load_ref_template(self) -> Optional[np.ndarray] :
 		#Config에 지정된 ref.csv 파일에서 첫 번째 행 template 데이터를 1회 로드
@@ -263,15 +349,18 @@ class CSVReader:
 			# csv 파일 데이터, ref 파형 데이터에서 처음 1회만 실행
 			_ref_template = self.load_ref_template()
 
+			#tgc 게인 Set
+			self.tgc_set()
+
 			df = pd.read_csv(file_path_in,header=None)
 			#파일 로드 시점 : 첫번째 Row 기반으로 공통 시간/주파수축 1회만 생성
 			_first_row = df.iloc[0].dropna().values.astype(float)
-			self.config.number_of_samples_in_Abeam = len(_first_row)
+			self.config.number_of_samples_in_Whole_Abeam = len(_first_row)
 		
 			#sample index : x축 공통
-			_shared_sample_indices = np.arange(self.config.number_of_samples_in_Abeam, dtype = int)
+			_shared_sample_indices = np.arange(self.config.number_of_samples_in_Whole_Abeam, dtype = int)
 			_time_distance = 1.0 / self.config.sampling_rate
-			_freqs_hz = np.fft.rfftfreq(self.config.number_of_samples_in_Abeam, d = _time_distance)
+			_freqs_hz = np.fft.rfftfreq(self.config.number_of_samples_in_Whole_Abeam, d = _time_distance)
 			#Real FFT 실행했을 때 각 주파수 성분이 몇 Hz(헤르츠)인지 물리적 주파수 축을 계산해 주는 NumPy 함수
 			#Hz보다 MHz 표기가 훨씬 직관적이기 때문
 			_shared_fft_freqs_Mhz = _freqs_hz/ 1e6
@@ -564,7 +653,7 @@ class AScanViewerGUI:
 		
 		if _mode == 'raw':
 			_sig_data = self.current_ascan.raw_data
-			_env_data = self.current_ascan.raw_envelope_data
+			#_env_data = self.current_ascan.raw_envelope_data
 			_fft_data = self.current_ascan.fft_magnitude
 			_peak_freq = self.current_ascan.center_freq_Mhz
 			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
@@ -572,7 +661,7 @@ class AScanViewerGUI:
 
 		elif _mode == 'tgc':
 			_sig_data = self.current_ascan.tgc_data
-			_env_data = self.current_ascan.tgc_envelope_data
+			#_env_data = self.current_ascan.tgc_envelope_data
 			_fft_data = self.current_ascan.filtered_fft_magnitude
 			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
 			self.ax_whole.set_title(f"1. Filtered TGC AScan Signal",fontsize=8, fontweight='bold')
