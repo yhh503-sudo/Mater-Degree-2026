@@ -38,7 +38,7 @@ class ExperimentConfig :
 	#step5-1 : TGC
 	tgc_enable : bool = False
 	tgc_start_sample_from_align : int = 0
-	tgc_slope_dB : float = 0.4 #샘플당 증폭개인(dB/Sample)
+	tgc_slope_dB : float = 0.04 #샘플당 증폭개인(dB/Sample)
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
@@ -140,6 +140,7 @@ class AScan:
 		self.tgc_ROI_min = self.ROI_min * tgc_gain_ndarray
 		self.tgc_ROI_Corr= self.ROI_Corr * tgc_gain_ndarray
 		self.tgc_ROI_Envelope = self.ROI_Envelope_Raw * tgc_gain_ndarray
+		pass
 
 	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None):
 		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
@@ -313,12 +314,12 @@ class CSVReader:
 		self.tgc_gain_linear_ROI : Optional[np.ndarray] = None
 
 	def tgc_setting(self):
-
 		indices = np.arange(self.config.align_pre_samples + self.config.align_post_samples)
 		#start_sample 이후부터 거리 비례 dB 증폭 적용
 		depth_offset = np.maximum(0, indices - self.config.tgc_start_sample_from_align)
 		gain_dB = depth_offset * self.config.tgc_slope_dB
 		self.tgc_gain_linear_ROI = 10.0 ** (gain_dB/20.0) #dB스케일을 선형 스케일로 변환
+		pass
 
 	def load_ref_template(self) -> Optional[np.ndarray] :
 		#Config에 지정된 ref.csv 파일에서 첫 번째 행 template 데이터를 1회 로드
@@ -406,8 +407,8 @@ class AScanViewerGUI:
 		self.current_ascan : Optional[AScan] = None #현재 화면에출력중인 Ascan객체
 		self.total_cols : int = 0
 		self.roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
-		self.roi_y_signal = np.arange(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
-		self.roi_y_env = np.arange(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
+		self.roi_y_signal = np.zeros(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
+		self.roi_y_env = np.zeros(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
 		#Align 예외 처리까지 고려한 padding
 				
 		#공통 x 축 변수 : 샘플 인덱스 배열
@@ -545,6 +546,8 @@ class AScanViewerGUI:
 		self.line_roi_signal = self.ax_roi.plot([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
 		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
 		self.ax_roi.legend(loc='upper right',fontsize=6)
+		self.line_roi_signal.set_xdata(self.roi_x)
+		self.line_roi_env.set_xdata(self.roi_x)
 
 		self.fig.tight_layout()
 		
@@ -638,8 +641,9 @@ class AScanViewerGUI:
 	def update_plots(self):		
 		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
 		_mode = self.view_mode_var.get()
-		_col_idx = self.current_ascan.col_index
-		
+		#_col_idx = self.current_ascan.col_index
+		_align = self.align_method_var.get()
+
 		if _mode == 'raw':
 			_sig_data = self.current_ascan.raw_data
 			_env_data = self.current_ascan.raw_envelope_data
@@ -647,14 +651,6 @@ class AScanViewerGUI:
 			_peak_freq = self.current_ascan.center_freq_Mhz
 			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
 			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
-
-		# elif _mode == 'tgc':
-		# 	_sig_data = self.current_ascan.tgc_data
-		# 	#_env_data = self.current_ascan.tgc_envelope_data
-		# 	_fft_data = self.current_ascan.filtered_fft_magnitude
-		# 	_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
-		# 	self.ax_whole.set_title(f"1. Filtered TGC AScan Signal",fontsize=8, fontweight='bold')
-		# 	self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
 
 		else: # "filtered"
 			_sig_data = self.current_ascan.filtered_data
@@ -688,14 +684,22 @@ class AScanViewerGUI:
 
 		self.line_align_marker.set_xdata([align_idx, align_idx])
 
-		#3. ROI 파형 및 수직 마커 업데이트
-		self.update_roi_buffer(signal_in = self.current_ascan.filtered_data, env_in = self.current_ascan.filtered_envelope_data, align_idx = align_idx)
-
-		#4. Line 포인터 교체
-		self.line_roi_signal.set_xdata(self.roi_x)
+		#3. ROI 파형  업데이트
+		if _align == "envelope_peak":
+			self.roi_y_signal = self.current_ascan.tgc_ROI_Envelope
+			self.roi_y_env = self.current_ascan.env_tgc_ROI_Envelope
+		elif _align == "pos_max":
+			self.roi_y_signal = self.current_ascan.tgc_ROI_Max
+			self.roi_y_env = self.current_ascan.env_tgc_ROI_Max
+		elif _align == "neg_min":
+			self.roi_y_signal = self.current_ascan.tgc_ROI_min
+			self.roi_y_env = self.current_ascan.env_tgc_ROI_min
+		elif _align == "cross_corr":
+			self.roi_y_signal = self.current_ascan.tgc_ROI_Corr
+			self.roi_y_env = self.current_ascan.env_tgc_ROI_Corr
+					
+		#4. Line 포인터 교체	
 		self.line_roi_signal.set_ydata(self.roi_y_signal)
-
-		self.line_roi_env.set_xdata(self.roi_x)
 		self.line_roi_env.set_ydata(self.roi_y_env)
 
 	def run(self):
