@@ -260,6 +260,17 @@ class AScan:
 		self.copy_roi_buffer(_align_idx, _pre_samples, _post_samples, self.ROI_Corr, signal)
 		
 
+	def apply_log_compression(data_in, k=0.01, dynamic_range_db = None):
+		#data : 양수 형태 int 배열
+		#k :로그 곡선의 기울기 조절하는 파라미터
+		#dynamic :최대 진폭 대비 잘라낼, 다이나믹 래인지 상한선. 하한 노이즈를 절단 Cliping하여 대비 명확히
+
+		#return : 0~1범위로 정규화 된 Log 압축 데이터 :  np.ndarray
+		data_safe = np.maximum(data_in, 0.0)
+		data_log = 20.0 * np.log10(1.0+k*data_safe)
+
+		if dynamic_range_db is not None:
+			max_val = np.max(data_log)
 
 	def copy_roi_buffer(self, align_idx : int, pre_samples : int, post_samples : int, ROI : np.ndarray, signal : np.ndarray) :
 		_raw_start = align_idx - pre_samples
@@ -506,6 +517,7 @@ class AScanViewerGUI:
 		#Matpolotlib 툴바(확대,이동,저장버튼)추가
 		_toolbar = matplotlib.backends.backend_tkagg.NavigationToolbar2Tk(self.canvas,window=_plot_frame)
 		_toolbar.update()
+
 		
 	def set_plot_style(self):
 		#초기 1회만 : 축, 격자, 빈 선 Line 셋팅
@@ -546,8 +558,7 @@ class AScanViewerGUI:
 		self.line_roi_signal = self.ax_roi.plot([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
 		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
 		self.ax_roi.legend(loc='upper right',fontsize=6)
-		self.line_roi_signal.set_xdata(self.roi_x)
-		self.line_roi_env.set_xdata(self.roi_x)
+
 
 		self.fig.tight_layout()
 		
@@ -573,6 +584,9 @@ class AScanViewerGUI:
 			self.line_whole_env.set_xdata(self.shared_sample_indices)
 			self.ax_whole.set_xlim(self.shared_sample_indices[0], self.shared_sample_indices[-1])	
 			self.line_whole_fft.set_xdata(self.shared_fft_freqs_Mhz)
+
+			self.line_roi_signal.set_xdata(self.roi_x)
+			self.line_roi_env.set_xdata(self.roi_x)
 
 			# FFT Y축 스케일 조절 : n sample -> fft y limit auto calibration
 			_est_peak = (32768.0 * 90.0) / len(self.shared_sample_indices)
