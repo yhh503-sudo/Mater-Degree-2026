@@ -36,15 +36,9 @@ class ExperimentConfig :
 	align_ROI_samples : int = 600 #ROI 샘플 갯수
 
 	#step5-1 : TGC
-<<<<<<< HEAD
-	tgc_enable : bool = True
-	tgc_start_sample_from_align : int = 40
-	tgc_slope_dB : float = 0.001 #샘플당 증폭개인(dB/Sample)
-=======
 	tgc_enable : bool = False
 	tgc_start_sample_from_align : int = 0
-	tgc_slope_dB : float = 0.01 #샘플당 증폭개인(dB/Sample)
->>>>>>> e18d39550eac99efdf948e20ede3e742ded7a047
+	tgc_slope_dB : float = 0.4 #샘플당 증폭개인(dB/Sample)
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
@@ -84,7 +78,7 @@ class AScan:
 		# 1. Raw 파형 분석 결과
 		self.fft_magnitude:Optional[np.ndarray]=None #set_ydata(self.current_ascan.fft_magnitude)
 		self.center_freq_Mhz : float = 0.0
-		#self.raw_envelope_data:Optional[np.ndarray] = None
+		self.raw_envelope_data:Optional[np.ndarray] = None
 		
 		#2. Filtered 파형 분석 결과
 		self.filtered_data : Optional[np.ndarray] = None
@@ -127,23 +121,13 @@ class AScan:
 
 		if self.filtered_data is None:
 			return
-		# 2. 전체 샘플 개수를 구하고, [0, 1, 2, ..., N-1] 인덱스 배열 생성
+
 		n_samples = len(self.filtered_data)
 		indices = np.arange(n_samples)
 
-		#3. start_sample 이전은 0, 이후부터는 1씩 증가하는 깊이(거리) 오프셋 계산
-		depth_offset_array = np.maximum(0, indices - start_sample) 
-
-		#start_sample = 3
-		#indices = np.array([0, 1, 2, 3, 4, 5])
-		# 1. 단순히 빼기만 했을 때:
-		# [0-3, 1-3, 2-3, 3-3, 4-3, 5-3] -> [-3, -2, -1, 0, 1, 2]
-		## 결과: [0, 0, 0, 0, 1, 2]
-
-		#4. 깊이에 비례하여 증가하는 dB 단위의 가인 계산
-		gain_dB = depth_offset_array * slope_dB
-
-		# 5. dB 스케일을 실제 신호에 곱할 수 있는 선형(Linear) 배율로 변환 (지수 함수)
+		#start_sample 이후부터 거리 비례 dB 증폭 적용
+		depth_offset = np.maxmimum(0, indices - start_sample)
+		gain_dB = depth_offset * slope_dB
 		gain_linear = 10.0 ** (gain_dB/20.0) #dB스케일을 선형 스케일로 변환
 
 		#TGC 반영된 ndarray 데이터 생성 및 Envelope 계산
@@ -156,7 +140,6 @@ class AScan:
 		self.tgc_ROI_min = self.ROI_min * tgc_gain_ndarray
 		self.tgc_ROI_Corr= self.ROI_Corr * tgc_gain_ndarray
 		self.tgc_ROI_Envelope = self.ROI_Envelope_Raw * tgc_gain_ndarray
-
 
 	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None):
 		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
@@ -245,10 +228,17 @@ class AScan:
 		_analytic_signal = hilbert(signal)
 		return np.abs(_analytic_signal)
 
-	def Make_roi_buffer(self, signal : np.ndarray) :
-		_pre_samples = self.config.align_pre_samples
-		_post_samples = self.config.align_post_samples
-		_numbers_ROI = _pre_samples + _post_samples
+	def envelope_at_TGC_ROI(self) : 
+		self.env_tgc_ROI_Max = np.abs(hilbert(self.tgc_ROI_Max))
+		self.env_tgc_ROI_min = np.abs(hilbert(self.tgc_ROI_min))
+		self.env_tgc_ROI_Corr = np.abs(hilbert(self.tgc_ROI_Corr))
+		self.env_tgc_ROI_Envelope = np.abs(hilbert(self.tgc_ROI_Envelope))
+		pass
+								
+	def Make_roi_buffer(self, signal : np.ndarray, pre :int, post: int) :
+		_pre_samples = pre
+		_post_samples = post
+		_numbers_ROI = pre + post
 
 		#초기화
 		self.ROI_Envelope_Raw = np.zeros(_numbers_ROI)
@@ -280,23 +270,23 @@ class AScan:
 		ROI[roi_start:roi_end] = signal[sig_start:sig_end]	
 					
 		
-	def process_full_pipeline(self, 
-						   sampling_rate:float, 
-						   lowcut_Mhz:float, highcut_Mhz:float, order:int=2, 
-						   fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
-						   align_method:str="envelope_peak",
-						   ref_template:Optional[np.ndarray]=None,
-						   tgc_gain_ndarray :Optional[np.ndarray]=None):
+	def process_full_pipeline(self,
+							sampling_rate:float, 
+							lowcut_Mhz:float, highcut_Mhz:float, order:int, 
+							pre_align : int, post_align : int,
+							fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
+							ref_template:Optional[np.ndarray]=None,
+							tgc_gain_ndarray :Optional[np.ndarray]=None):
 		#최초 1회 사전 계산
 
 		#1. Raw Analysis 
 		self.fft_magnitude, self.center_freq_Mhz = self.compute_fft(self.raw_data, fft_freqs_Mhz_in)
-		#self.raw_envelope_data = self.extract_envelope(self.raw_data)
+		self.raw_envelope_data = self.extract_envelope(self.raw_data)
 
 		#2. BandPass Analysis
 		self.apply_bandpass_filter(sampling_rate,lowcut_Mhz,highcut_Mhz,order)
 
-		#3. Filtered 파형 FFT, Envelope
+		#3. Filtered 파형 FFT, Envelope : 기본 생성이네
 		if self.filtered_data is not None:
 			self.filtered_fft_magnitude, self.filtered_center_freq_Mhz = self.compute_fft(self.filtered_data, fft_freqs_Mhz_in)
 			self.filtered_envelope_data = self.extract_envelope(self.filtered_data)
@@ -305,10 +295,13 @@ class AScan:
 		self.compute_all_align_indices(ref_template = ref_template)
 
 		#5. ROI생성
-		self.Make_roi_buffer(signal = self.filtered_data)
+		self.Make_roi_buffer(signal = self.filtered_data, pre = pre_align, post = post_align)
 
 		#5. TGC 보정 적용 : Filtered 신호 기반	 
 		self.apply_tgc_all(tgc_gain_ndarray = tgc_gain_ndarray)
+
+		#6 TGC된 ROI에 Envelope 적용
+		self.envelope_at_TGC_ROI()
 
 
 		
@@ -378,7 +371,9 @@ class CSVReader:
 					order = self.config.filter_order,
 					fft_freqs_Mhz_in = _shared_fft_freqs_Mhz,
 					ref_template = _ref_template,
-					tgc_gain_ndarray = self.tgc_gain_linear_ROI)
+					tgc_gain_ndarray = self.tgc_gain_linear_ROI,
+					pre_align=self.config.align_pre_samples,
+					post_align=self.config.align_post_samples)
 				ascan_list.append(ascan)
 
 			if len(ascan_list)==0:
@@ -411,13 +406,13 @@ class AScanViewerGUI:
 		self.current_ascan : Optional[AScan] = None #현재 화면에출력중인 Ascan객체
 		self.total_cols : int = 0
 		self.roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
-		self.roi_y_signal = np.arange(self.config.align_pre_samples+self.config.align_post_samples, dtype = float)
-		self.roi_y_env = np.arange(self.config.align_pre_samples+self.config.align_post_samples, dtype = float)
+		self.roi_y_signal = np.arange(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
+		self.roi_y_env = np.arange(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
 		#Align 예외 처리까지 고려한 padding
 				
 		#공통 x 축 변수 : 샘플 인덱스 배열
 		self.shared_sample_indices : Optional[np.ndarray] = None
-		self.shared_fft_freqs_Mhz:Optional[np.ndarray]=None
+		self.shared_fft_freqs_Mhz:Optional[np.ndarray] = None
 
 		#UI 컨트롤 변수들 : 뷰 모드 선택 : 라디오 변수(raw/filtered), Align
 		self.view_mode_var = tk.StringVar(value="raw")
@@ -463,9 +458,10 @@ class AScanViewerGUI:
 		ttk.Label(_control_frame, text="Display Mode:").grid(row=1,column=0,padx=(15,5),pady=2)
 		_low_Mhz, _high_Mhz=int(self.config.filter_lowcut_Mhz),int(self.config.filter_highcut_Mhz)
 		_filtered_btn_text = f"Filtered {_low_Mhz}-{_high_Mhz}Mhz"
+
 		ttk.Radiobutton(_control_frame,text=_filtered_btn_text, variable= self.view_mode_var, value="filtered",command=self.on_view_mode_change).grid(row=1,column=1,padx=3,pady=2)
 		ttk.Radiobutton(_control_frame,text="Raw Data", variable= self.view_mode_var,  value="raw", command=self.on_view_mode_change).grid(row=1,column=2,padx=3,pady=2)
-		ttk.Radiobutton(_control_frame,text="TGC Signal", variable=self.view_mode_var, value="tgc", command=self.on_view_mode_change).grid(row=1,column=3,padx=3,pady=2)
+		#ttk.Radiobutton(_control_frame,text="TGC Signal", variable=self.view_mode_var, value="tgc", command=self.on_view_mode_change).grid(row=1,column=3,padx=3,pady=2)
 
 		#좌상단 4열 : align 라디오 버튼 4종
 		ttk.Separator(_control_frame, orient='vertical').grid(row=0,column=4,rowspan=2,sticky="ns",padx=15) #구간 나누기
@@ -621,7 +617,7 @@ class AScanViewerGUI:
 			self.update_plots()
 			self.canvas.draw()
 
-	def update_roi_buffer(self, signal : np.ndarray, env : np.ndarray, align_idx : int) :
+	def update_roi_buffer(self, signal_in : np.ndarray, env_in : np.ndarray, align_idx : int) :
 		'''기존 buffer를 그대로 재사용'''
 		#초기화
 		self.roi_y_signal[:] = 0.0
@@ -631,13 +627,13 @@ class AScanViewerGUI:
 		raw_end = align_idx + self.config.align_post_samples
 
 		sig_start = max(0, raw_start)
-		sig_end = min(len(signal), raw_end)
+		sig_end = min(len(signal_in), raw_end)
 
 		roi_start = sig_start - raw_start #항상 0 이상
 		roi_end = roi_start + (sig_end - sig_start)
 
-		self.roi_y_signal[roi_start:roi_end] = signal[sig_start:sig_end]	
-		self.roi_y_env[roi_start:roi_end] = env[sig_start:sig_end]
+		self.roi_y_signal[roi_start:roi_end] = signal_in[sig_start:sig_end]	
+		self.roi_y_env[roi_start:roi_end] = env_in[sig_start:sig_end]
 					
 	def update_plots(self):		
 		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
@@ -646,19 +642,19 @@ class AScanViewerGUI:
 		
 		if _mode == 'raw':
 			_sig_data = self.current_ascan.raw_data
-			#_env_data = self.current_ascan.raw_envelope_data
+			_env_data = self.current_ascan.raw_envelope_data
 			_fft_data = self.current_ascan.fft_magnitude
 			_peak_freq = self.current_ascan.center_freq_Mhz
 			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
 			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
 
-		elif _mode == 'tgc':
-			_sig_data = self.current_ascan.tgc_data
-			#_env_data = self.current_ascan.tgc_envelope_data
-			_fft_data = self.current_ascan.filtered_fft_magnitude
-			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
-			self.ax_whole.set_title(f"1. Filtered TGC AScan Signal",fontsize=8, fontweight='bold')
-			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
+		# elif _mode == 'tgc':
+		# 	_sig_data = self.current_ascan.tgc_data
+		# 	#_env_data = self.current_ascan.tgc_envelope_data
+		# 	_fft_data = self.current_ascan.filtered_fft_magnitude
+		# 	_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
+		# 	self.ax_whole.set_title(f"1. Filtered TGC AScan Signal",fontsize=8, fontweight='bold')
+		# 	self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
 
 		else: # "filtered"
 			_sig_data = self.current_ascan.filtered_data
@@ -674,7 +670,7 @@ class AScanViewerGUI:
 		
 		#2. FFT
 		self.line_whole_fft.set_ydata(_fft_data)
-		self.line_peak_freq.set_xdata([_peak_freq,_peak_freq])
+		self.line_peak_freq.set_xdata([_peak_freq, _peak_freq])
 	
 		align_idx = self.current_ascan.get_align_index(self.config.align_method)
 
@@ -682,8 +678,8 @@ class AScanViewerGUI:
 			align_idx = 0
 			self.ax_roi.set_title(f"ROI Align : {None}")
 		else :
-			if self.current_ascan.phase_inverse!=None :
-				self.line_inverse_marker.set_xdata([self.current_ascan.phase_inverse,self.current_ascan.phase_inverse])
+			if self.current_ascan.phase_inverse != None :
+				self.line_inverse_marker.set_xdata([self.current_ascan.phase_inverse, self.current_ascan.phase_inverse])
 				self.line_inverse_marker.set_visible(True)
 				self.ax_roi.set_title(f"ROI Align {align_idx}, Inverse {self.current_ascan.phase_inverse}")
 			else:
@@ -693,9 +689,9 @@ class AScanViewerGUI:
 		self.line_align_marker.set_xdata([align_idx, align_idx])
 
 		#3. ROI 파형 및 수직 마커 업데이트
-		self.update_roi_buffer(_sig_data, _env_data, align_idx)
+		self.update_roi_buffer(signal_in = self.current_ascan.filtered_data, env_in = self.current_ascan.filtered_envelope_data, align_idx = align_idx)
 
-		#Line 포인터 교체
+		#4. Line 포인터 교체
 		self.line_roi_signal.set_xdata(self.roi_x)
 		self.line_roi_signal.set_ydata(self.roi_y_signal)
 
