@@ -259,18 +259,48 @@ class AScan:
 		_align_idx = self.align_indices.get('cross_corr')
 		self.copy_roi_buffer(_align_idx, _pre_samples, _post_samples, self.ROI_Corr, signal)
 		
-
-	def apply_log_compression(data_in, k=0.01, dynamic_range_db = None):
-		#data : 양수 형태 int 배열
+ 
+	def apply_log_compression(data_in, k=0.005, dynamic_range_db = 40):
+		#data_in : 양수 형태 int 배열
 		#k :로그 곡선의 기울기 조절하는 파라미터
-		#dynamic :최대 진폭 대비 잘라낼, 다이나믹 래인지 상한선. 하한 노이즈를 절단 Cliping하여 대비 명확히
+		#dynamic_range_db : 최대 진폭 대비 잘라낼, 다이나믹 래인지 상한선. 하한 노이즈를 절단 Cliping하여 대비 명확히
 
 		#return : 0~1범위로 정규화 된 Log 압축 데이터 :  np.ndarray
+		
+		# [1 단계] 입력 데이터 안전성 확보 (음수값이나 0에 의한 np.log10 에러 방지)
 		data_safe = np.maximum(data_in, 0.0)
-		data_log = 20.0 * np.log10(1.0+k*data_safe)
+		# [2 단계] 기본 Log Compression 계산: S_out = 20 * log10(1 + k * S_in)
+		data_log = 20.0 * np.log10(1.0+ k * data_safe)
+		#k가 커질 때 (예: $k = 0.1$ ~ $1.0$): 로그 곡선이 매우 급격히 꺾입니다. 작은 신호(내부 결함, 노이즈)를 폭발적으로 끌어올려 밝게 만들고, 큰 신호는 강하게 누릅니다.
+		#k가 작아질 때 (예: $k = 0.0001$ ~ $0.001$): 로그 곡선이 직선(Linear)에 가까워집니다. 미세 신호 뻥튀기 효과가 줄어들고 큰 신호 위주로 선명해집니다.
 
+		# [3 단계] Dynamic Range Clipping (선택 옵션) : 
+		# 특정 dB 이하의 미세 노이즈를 0으로 자르고 상한선을 제한
+		#최대 피크 신호 대비 몇 dB까지의 신호만 화면에 보여줄 것인가
+		#dynamic_range_db = 40.0으로 설정하면, 최고 신호보다 40dB 이상 작은 노이즈 및 자잘한 바닥 신호들은 완전히 검은색(0) 처리
+		#Log Compression으로 인해 함께 올라온 배경 바닥 노이즈를 깔끔하게 잘라내어(Clipping) 이미지의 대비(Contrast)를 또렷하게 만드는 역할
 		if dynamic_range_db is not None:
 			max_val = np.max(data_log)
+			min_cutoff = max_val - dynamic_range_db
+			# cutoff 미만의 미세 노이즈는 cutoff 값으로 바닥을 맞 춤
+			#정해둔 최소값(min)보다 작은 값은 최소값으로, 최대값(max)보다 큰 값은 최대값으로
+			data_log = np.clip(data_log, min_cutoff, max_val)
+
+		# [4 단계] [0.0, 1.0] 범위 정규화 (Min-Max Normalization)
+		min_v = np.min(data_log)
+		max_v = np.max(data_log)
+
+		# 분모가 0이 되는 Zero-division 방지
+		if max_v - min_v > 1e-12:
+			# ($0.000000000001$)라는 0에 매우 가까운 극소값
+			# "최대값과 최소값의 차이가 0이 아니라 실제로 값이 존재하는가?
+			data_norm = (data_log - min_v) / (max_v - min_v)
+			#로그 압축이 완료된 임의의 범위 수치들을 최종 0.0 ~ 1.0 (Float) 표준 범위로 맞춥니다.
+		else : 
+			data_norm = np.zeros_like(data_log)
+			#기존에 존재하는 어떤 배열(Array)의 '모양(Shape)'과 '데이터 타입(dtype)'을 그대로 복사해서, 값만 전부 0으로 채워진 새 배열
+		return data_norm
+
 
 	def copy_roi_buffer(self, align_idx : int, pre_samples : int, post_samples : int, ROI : np.ndarray, signal : np.ndarray) :
 		_raw_start = align_idx - pre_samples
