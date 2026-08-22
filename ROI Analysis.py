@@ -106,6 +106,9 @@ class UltrasoundApp(QMainWindow):
         display_layout.addLayout(right_vbox, 1)
 
         main_layout.addLayout(display_layout)
+
+        # ★ 아래 한 줄을 맨 끝에 추가하세요!
+        main_widget.setLayout(main_layout)
         
         # 컨트롤 패널 디자인 다듬기
         main_widget.setStyleSheet("""
@@ -190,8 +193,9 @@ class UltrasoundApp(QMainWindow):
         hist = cv2.calcHist([self.roi_img], [0], None, [256], [0, 256])
 
         ax.plot(hist, color='blue', linewidth=1)
-        ax.set_xlim([0, 300])
-        ax.set_ylim([0, max(hist)[0] * 1.1 if max(hist)[0] > 0 else 100])
+        ax.set_xlim([0, 260])
+        max_val = np.max(hist)
+        ax.set_ylim([0, max_val if max_val > 0 else 100])
         
         # 그래프 여백 정리
         self.figure.tight_layout()
