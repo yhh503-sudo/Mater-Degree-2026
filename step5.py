@@ -108,6 +108,10 @@ class AScan:
 		self.env_tgc_ROI_Corr : Optional[np.ndarray] = None
 		self.env_tgc_ROI_Envelope : Optional[np.ndarray] = None
 
+		#5. Step5-4 : B-Scan 매핑용 8bit uint 메모리 효율화 변수 추가
+		self.roi_bscan_bytes : Optional[np.ndarray] = None # (ROI_samples,) 크기의 uint8 배열
+
+
 	def get_align_index(self, method : str) -> Optional[int] : 
 		'''지정한 어라인 방식의 인덱스 반환'''
 		return self.align_indices.get(method)
@@ -258,14 +262,16 @@ class AScan:
 
 		_align_idx = self.align_indices.get('cross_corr')
 		self.copy_roi_buffer(_align_idx, _pre_samples, _post_samples, self.ROI_Corr, signal)
-		
- 
-	def apply_log_compression(data_in, k=0.005, dynamic_range_db = 40):
+
+	@staticmethod
+	def apply_log_compression(data_in: np.ndarray, k : float = 0.005, dynamic_range_db : float = 40.0) -> np.ndarray :
+	    
+        #[메모리 최적화] Log Compression 처리 후 바로 8-bit 정수(np.uint8, 0~255)로 변환하여 반환
+       
 		#data_in : 양수 형태 int 배열
 		#k :로그 곡선의 기울기 조절하는 파라미터
 		#dynamic_range_db : 최대 진폭 대비 잘라낼, 다이나믹 래인지 상한선. 하한 노이즈를 절단 Cliping하여 대비 명확히
 
-		#return : 0~1범위로 정규화 된 Log 압축 데이터 :  np.ndarray
 		
 		# [1 단계] 입력 데이터 안전성 확보 (음수값이나 0에 의한 np.log10 에러 방지)
 		data_safe = np.maximum(data_in, 0.0)
@@ -299,8 +305,9 @@ class AScan:
 		else : 
 			data_norm = np.zeros_like(data_log)
 			#기존에 존재하는 어떤 배열(Array)의 '모양(Shape)'과 '데이터 타입(dtype)'을 그대로 복사해서, 값만 전부 0으로 채워진 새 배열
-		return data_norm
-
+		
+		#return : 0~1범위로 정규화 된 Log 압축 데이터 => np.ndarray바로 8-bit unsigned integer (0~255)로 캐스팅하여 메모리 절감
+		return (data_norm * 255.0).astype(np.uint8)
 
 	def copy_roi_buffer(self, align_idx : int, pre_samples : int, post_samples : int, ROI : np.ndarray, signal : np.ndarray) :
 		_raw_start = align_idx - pre_samples
@@ -344,6 +351,9 @@ class AScan:
 
 		#6 TGC된 ROI에 Envelope 적용
 		self.envelope_at_TGC_ROI()
+
+		#7. B Scan용 8bit Log Compression 데이터 생성 (메모리 절감)
+		self.roi_bscan_bytes = AScan.apply_log_compression(self.env_tgc_ROI_Envelope)
 
 
 		
@@ -748,6 +758,26 @@ class AScanViewerGUI:
 
 	def run(self):
 		self.window.mainloop()
+
+#5. AScan 리스트로부터 메모리 효율적인 RGB 3차원 B-Scan 이미지를 생성하는 클래스
+
+class BScanProcessor : 
+	@staticmethod
+	def generate_bscan_rgb(ascan_list : List[AScan], enable_inverse_overlay : bool = False) -> np.ndarray :
+
+		if ascan_list is None or ascan_list[0].roi_bscan_bytes is None :
+			return np.array([])
+
+		num_cols = len(ascan_list)
+		roi_len = len(ascan_list[0].roi_bscan_bytes)
+
+		#1차원 greyScale uint8 행렬 구축 (Nz, Nx)
+		#각 AScan의 8bit uint8 데이터를 열(collumn) 단위로 쌓음
+		bscan_gray = np.zeros((roi_len,num_cols), dtype=np.uint8)
+		
+
+
+
 #실행부
 if __name__ == "__main__":
 	#app객체 생성
