@@ -825,6 +825,7 @@ class UltrasoundSignalViewer :
 class BScanProcessor : 
 	@staticmethod
 	def generate_bscan_2d(ascan_list : List[AScan]) -> np.ndarray:
+		'''1채널 흑백 버퍼 생성 (기존 유지)'''
 		if not ascan_list or ascan_list[0].roi_bscan_bytes is None:
 			messagebox.showerror("Error","B-Scan 만들 준비가 안되었습니다")
 			return np.array([[]]) #빈 2차원 NumPy 배열
@@ -838,7 +839,30 @@ class BScanProcessor :
 				#1차원 A-Scan 바이트 데이터를 2차원 이미지의 한 열에 세로 방향으로 할당
 		print(f"B Scan 흑백 이미지 구성이 완료되었습니다")
 		return bscan_gray#완성된 2차원 흑백(Gray) B-Scan 이미지를 반환
+
+	@staticmethod
+	def apply_phase_inverse_overlay(bscan_gray : np.ndarray, ascan_list : List[AScan], config : ExperimentConfig, enable_blue : bool) -> np.ndarray:
+		'''Draw 직전 호출 : 1채널 Gray를 3채널로 확장후, Phase Inverse 지점에 Blue 오버레이'''
+		#1. 1채널(H,W) -> 3채널 (H,W,3) RGB로 확장
+		bscan_rgb  = np.stack([bscan_gray]*3,axis=-1)
+
+		if not enable_blue:
+			return bscan_rgb
 		
+		#blue 오버레이 적용
+		
+		align_pre = config.align_pre_samples
+		roi_len = bscan_gray.shape[0]
+		for col_idx, ascan in enumerate(ascan_list):
+			if ascan.phase_inverse is not None:
+				align_idx = ascan.get_align_index(config.align_method) or 0
+
+				#원본 파형 인덱스를 ROI 상대 인덱스로 변환
+				#ROI 시작점 : align_idx - align_pre
+				relative_idx = ascan.phase_inverse - (align_idx - align_pre)
+				bscan_rgb[relative_idx, col_idx] = [0, 0, 255]
+
+	
 
 #실행부
 if __name__ == "__main__":
