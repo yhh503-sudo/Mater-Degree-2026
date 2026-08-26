@@ -13,6 +13,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 from matplotlib. lines import Line2D
 import ctypes
+import time
 
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
@@ -241,7 +242,7 @@ class AScan:
 
 
 	@staticmethod
-	def apply_log_compression(data_in: np.ndarray, k : float = 0.005, dynamic_range_db : float = 40.0) -> np.ndarray :
+	def apply_log_compression(data_in: np.ndarray, k : float = 0.003, dynamic_range_db : float = 30.0) -> np.ndarray :
 	    
         #[메모리 최적화] Log Compression 처리 후 바로 8-bit 정수(np.uint8, 0~255)로 변환하여 반환
        
@@ -455,6 +456,10 @@ class UltrasoundSignalViewer :
 
 		self.bscan_img_display = None
 		self.line_bscan_cursor : Optional[Line2D] = None #커서 직선
+
+		# #드로잉 버벅을 막기 위한
+		self.bscan_background = None #copy_from_bbox: B-Scan 이미지와 축, 눈금이 다 그려진 최종 픽셀 결과를 그래픽 메모리에 사진처럼 캡처(비트맵 저장)해
+		self.last_ascan_update_time = 0.0
 	
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
@@ -532,7 +537,8 @@ class UltrasoundSignalViewer :
 		self.canvas=FigureCanvasTkAgg(figure = self.fig, master = _plot_frame)
 		self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 		# Matplotlib Mouse Motion Event 바인딩 (CTRL + Mouse Hover 연동)
-		self.canvas.mpl_connect('motion_notify_event', self.on_bscan_mouse_move)
+		self.canvas.mpl_connect('motion_notify_event', self.on_bscan_mouse_move_new)
+		self.canvas.mpl_connect('motion_notify_event', self.on_canvas_draw) #드로잉 버벅을 막기 위한
 		#Matpolotlib 툴바(확대,이동,저장버튼)추가
 		_toolbar = matplotlib.backends.backend_tkagg.NavigationToolbar2Tk(self.canvas,window=_plot_frame)
 		_toolbar.update()
@@ -578,7 +584,7 @@ class UltrasoundSignalViewer :
 		self.ax_bscan.set_title("B SCAN", fontsize=12, fontweight = 'bold')
 		self.ax_bscan.set_xlabel("Scan Index (Collum)", fontsize=8)
 		self.ax_bscan.set_ylabel("Dpeth Samples",fontsize=8)
-		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00',linestyle='-', linewidth=1.5, visible=False)
+		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00',linestyle='-', linewidth=1.5, visible=False, animated=True)#animated=True 추가 (Blitting용 고속 드로잉 모드)
 
 		self.fig.tight_layout()
 		
@@ -652,16 +658,61 @@ class UltrasoundSignalViewer :
 
 		self.line_bscan_cursor.set_visible(True)
 
-	def on_bscan_mouse_move(self, event_in) : 
+	def on_canvas_draw(self, event_in):
+		#캔버스가 새로 그려질 때, BScan의 깨끗한 배경 메모리를 저장
+		if self.canvas : 
+			self.bscan_background = self.canvas.copy_from_bbox(self.ax_bscan.bbox) #copy_from_bbox: B-Scan 이미지와 축, 눈금이 다 그려진 최종 픽셀 결과를 그래픽 메모리에 사진처럼 캡처(비트맵 저장)
+
+	# def on_bscan_mouse_move(self, event_in) : 
+	# 	'''CTRL 키 누른 상태로, B-Scan 이동 시 이벤트 연동'''
+	# 	if event_in.inaxes == self.ax_bscan and event_in.key == 'control' :
+	# 		if event_in.xdata is not None:
+	# 			col_idx = int(round(event_in.xdata))
+	# 			if 0<= col_idx < self.total_cols :
+	# 				self.spin_col.delete(0, tk.END)
+	# 				self.spin_col.insert(0, str(col_idx)) #0 즉 맨 앞에 str(col_idx)를 넣어라.
+	# 				self.select_ascan_column(col_index_in = col_idx)
+
+
+	def on_bscan_mouse_move_new(self, event_in) : 
 		'''CTRL 키 누른 상태로, B-Scan 이동 시 이벤트 연동'''
 		if event_in.inaxes == self.ax_bscan and event_in.key == 'control' :
 			if event_in.xdata is not None:
 				col_idx = int(round(event_in.xdata))
 				if 0<= col_idx < self.total_cols :
-					self.spin_col.delete(0, tk.END)
-					self.spin_col.insert(0, str(col_idx)) #0 즉 맨 앞에 str(col_idx)를 넣어라.
-					self.select_ascan_column(col_index_in = col_idx)
 
+					#빠른 랜더링 위해 : draw_Idle() 을 피하려
+					#self.select_ascan_column() 사용 안함.
+
+					# --------------------------------------------------
+                    # 🚀 1. B-Scan 커서 초고속 Blitting 처리 (매 이동마다 60fps+)
+                    # --------------------------------------------------
+
+					if self.line_bscan_cursor and self.bscan_background : 
+
+						self.canvas.restore_region(self.bscan_background) #매 프레임마다 복잡한 연산을 전부 건너뛰고, 저장된 B-Scan 픽셀 사진만 화면에 바로 덮어씌웁니다 (CPU 연산 0에 수렴
+						# 수직선 좌표 업데이트
+						self.line_bscan_cursor.set_xdata([col_idx,col_idx])
+						# 커서 선만 빠르게 랜더링
+						self.ax_bscan.draw_artist(self.line_bscan_cursor)
+						#B-Scan 영역 픽셀만 스크린 갱신
+						self.canvas.blit(self.ax_bscan.bbox) 
+
+					# --------------------------------------------------
+                    # ⏱️ 2. A-Scan 3개 그래프 & Spinbox (100ms 스로틀링)
+                    # --------------------------------------------------
+					current_time = time.time()
+					if current_time - self.last_ascan_update_time >= 0.1 : # 100ms 초과시
+						self.last_ascan_update_time = current_time
+						self.spin_col.delete(0,tk.END)
+						self.spin_col.insert(0, str(col_idx))
+
+						#A-scan 3개 업데이트
+						self.current_ascan = self.ascan_list[col_idx]
+						self.update_plots_new()
+						self.canvas.draw_idle()
+
+		
 
 	def _on_enter_pressed(self, event_L):
 		self.on_col_change()
@@ -687,7 +738,7 @@ class UltrasoundSignalViewer :
 		if self.line_bscan_cursor : 
 			self.line_bscan_cursor.set_xdata([col_index_in,col_index_in])
 		self.update_plots_new()
-		self.canvas.draw_idle() #고속 UI 반응을 위한
+		self.canvas.draw_idle() #고속 UI 반응을 위한다고 하지만, artist()보다는 느림
 		
 	def on_view_mode_change(self):
 		#모드 토글시 화면 즉시 전환
