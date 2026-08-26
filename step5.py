@@ -477,7 +477,7 @@ class UltrasoundSignalViewer :
 
 		#좌상단 2열 : Col 번호 선택 스핀박스(위/아래 화살표 버튼으로 숫자 바꾸기)
 		ttk.Label(_control_frame,text="Col Index:").grid(row=0,column=2,padx=(15,5),pady=2)
-		self.spin_col = ttk.Spinbox(_control_frame, from_=0, to=0, width=8, command=self.on_col_change)
+		self.spin_col = ttk.Spinbox(_control_frame, from_=0, to=0, width=8, command = self.on_col_change)
 		self.spin_col.grid(row=0, column=3, padx=5, pady=2)
 		self.spin_col.bind("<Return>", self._on_enter_pressed)
 		
@@ -658,7 +658,7 @@ class UltrasoundSignalViewer :
 			if event_in.xdata is not None:
 				col_idx = int(round(event_in.xdata))
 				if 0<= col_idx < self.total_cols :
-					self.spin_col.delete(0, tk.End)
+					self.spin_col.delete(0, tk.END)
 					self.spin_col.insert(0, str(col_idx)) #0 즉 맨 앞에 str(col_idx)를 넣어라.
 					self.select_ascan_column(col_index_in = col_idx)
 
@@ -667,7 +667,7 @@ class UltrasoundSignalViewer :
 		self.on_col_change()
 		
 	def on_col_change(self):
-		"""스핀박스 숫자 변경시 자동 실행"""
+		"""스핀박스 숫자를, 사용자가 직접 변경시 자동 실행"""
 		if self.ascan_list is None :
 			print(f'AScan 임포트 된 게 없습니다')
 			return
@@ -709,7 +709,7 @@ class UltrasoundSignalViewer :
 			for a_scan in self.ascan_list : 
 				a_scan.update_roi_buffer(selected_method, pre, post, tgc_gain_array)
 
-			self.render_bscan()
+			self.render_bscan() #여기에서 새롭게 b 스캔 랜더링함
 			self.update_plots_new()
 			self.canvas.draw_idle()
 
@@ -775,7 +775,7 @@ class BScanProcessor :
 	@staticmethod
 	def generate_bscan_2d(ascan_list : List[AScan]) -> np.ndarray:
 		if not ascan_list or ascan_list[0].roi_bscan_bytes is None:
-			messagebox.showerror("Error: B-Scan 만들 준비가 안되었습니다")
+			messagebox.showerror("Error","B-Scan 만들 준비가 안되었습니다")
 			return np.array([[]]) #빈 2차원 NumPy 배열
 		num_cols = len(ascan_list)
 		roi_len = len(ascan_list[0].roi_bscan_bytes)
