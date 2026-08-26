@@ -94,23 +94,6 @@ class AScan:
 		#4. STEP4-2 : Phase Inversion 깊이 좌표 (존재 시)
 		self.phase_inverse : Optional[int] = None
 
-		# self.ROI_Max : Optional[np.ndarray] = None
-		# self.ROI_min : Optional[np.ndarray] = None
-		# self.ROI_Corr : Optional[np.ndarray] = None
-		# self.ROI_Envelope_Raw : Optional[np.ndarray] = None
-
-		# #5. Step5-1 : TGC
-		# self.tgc_ROI_Max : Optional[np.ndarray] = None
-		# self.tgc_ROI_min : Optional[np.ndarray] = None
-		# self.tgc_ROI_Corr : Optional[np.ndarray] = None
-		# self.tgc_ROI_Envelope : Optional[np.ndarray] = None
-
-		# #5. Step5-3 : Envelope
-		# self.env_tgc_ROI_Max : Optional[np.ndarray] = None
-		# self.env_tgc_ROI_min : Optional[np.ndarray] = None
-		# self.env_tgc_ROI_Corr : Optional[np.ndarray] = None
-		# self.env_tgc_ROI_Envelope : Optional[np.ndarray] = None
-
 	def get_align_index(self, method : str) -> Optional[int] : 
 		'''지정한 어라인 방식의 인덱스 반환'''
 		return self.align_indices.get(method)
@@ -119,7 +102,7 @@ class AScan:
     # 🎯 독립된 개별 신호 처리 메서드 모음
     # ==========================================	
 
-	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None):
+	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None, _condition0 : float = -0.4, _condition1 : float = 1.0, _condition2 : float = 0.15):
 		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
 		# if self.filtered_data is None or self.filtered_envelope_data is None:#align 대상은 : 반드시 밴드패스 거친
 		# 	print(f"[Warning] BANDPASS 필터 연산이 실패했습니다")
@@ -161,9 +144,9 @@ class AScan:
 
 				# 🎯 [논문 조건 반영] Phase Inversion 판정 임계값
 
-				_cond0 = _roi_neg_val < - 0.4
-				_cond1 = abs(_roi_neg_val) > roi_pos_val * 1
-				_cond2 = abs(_roi_neg_val) > pos_val * 0.15
+				_cond0 = _roi_neg_val < _condition0
+				_cond1 = abs(_roi_neg_val) > roi_pos_val * _condition1
+				_cond2 = abs(_roi_neg_val) > pos_val * _condition2
 
 				#반사파 구간에서 음의 피크가 양의 피크보다 우세할 경우, Phase Inverse
 				if _cond0 and _cond1  and _cond2 :
@@ -344,20 +327,6 @@ class AScan:
 		# 선택된 Align 방법 기반 : 단일, ROI / TGC / Log Comrpession 버퍼 / B-scan용 8bit 계산
 		self.update_roi_buffer(align_method,pre_align, post_align, tgc_gain_ndarray)
 
-		'''  
-		#5. ROI생성
-		self.Make_roi_buffer(signal = self.filtered_data, pre = pre_align, post = post_align)
-
-		#5. TGC 보정 적용 : Filtered 신호 기반	 
-		self.apply_tgc_all(tgc_gain_ndarray = tgc_gain_ndarray)
-
-		#6 TGC된 ROI에 Envelope 적용
-		self.envelope_at_TGC_ROI()
-
-		#7. B Scan용 8bit Log Compression 데이터 생성 (메모리 절감)
-		self.roi_bscan_bytes = AScan.apply_log_compression(self.env_tgc_ROI_Envelope)
-		'''	
-
 		
 #CSV 파일 로더 클래스
 class CSVReader:
@@ -437,13 +406,14 @@ class CSVReader:
 			if len(ascan_list)==0:
 				raise ValueError("None A Beam imported")
 			
+			print(f"A Scan Data들이 모두 Import 되었습니다")
 			return ascan_list, _shared_sample_indices, _shared_fft_freqs_Mhz #자동으로 튜플 묶임
 			
 		except Exception as e:
 			raise RuntimeError(f"csv 파일을 읽는 중 에러가 발생 : {str(e)}")
 			
 #4. AScanViewerGUI : 화면 UI 클래스
-class AScanViewerGUI:
+class UltrasoundSignalViewer :
 	def __init__(self):
 
 		#window 배율 150% 방지
@@ -454,7 +424,7 @@ class AScanViewerGUI:
 			pass
 		
 		self.window = tk.Tk()
-		self.window.title("Ultrasound Signal Processor : STEP5 (B Scan)")
+		self.window.title("Ultrasound Signal Processor : B Scan Analyzer")
 		self.window.geometry("1280x720")
 		
 		#데이터 분석 객체 생성
@@ -465,11 +435,6 @@ class AScanViewerGUI:
 		self.total_cols : int = 0
 		self.roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
 
-		#2거 2개를 아예 뺴버렸어?
-		#self.roi_y_signal = np.zeros(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
-		#self.roi_y_env = np.zeros(self.config.align_pre_samples + self.config.align_post_samples, dtype = float)
-		#Align 예외 처리까지 고려한 padding
-				
 		#공통 x 축 변수 : 샘플 인덱스 배열
 		self.shared_sample_indices : Optional[np.ndarray] = None
 		self.shared_fft_freqs_Mhz:Optional[np.ndarray] = None
@@ -478,17 +443,18 @@ class AScanViewerGUI:
 		self.view_mode_var = tk.StringVar(value="raw")
 		self.align_method_var = tk.StringVar(value = self.config.align_method)
 
-		# Matplotlib Line 객체 참조 변수 (고속 데이터 업데이트용)
+		# Matplotlib Line 객체 참조 변수 : (고속 데이터 업데이트용)
 		self.line_whole_signal : Optional[Line2D] = None #파형:Raw / Filtered
 		self.line_whole_env : Optional[Line2D] = None #Envelope :모두 존재
 		self.line_align_marker : Optional[Line2D] = None #동적 수직선 마커 저장용
 		self.line_inverse_marker:Optional[Line2D] = None
-
 		self.line_whole_fft : Optional[Line2D] = None #FFT:모두 존재
 		self.line_peak_freq: Optional[Line2D] = None# 🎯 초록색 Peak 주파수 수직 가이드라인 추가
-
 		self.line_roi_signal : Optional[Line2D] = None #ROI 파형
 		self.line_roi_env : Optional[Line2D] = None #ROI 엔벨롭
+
+		self.bscan_img_display = None
+		self.line_bscan_cursor : Optional[Line2D] = None #커서 직선
 	
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
@@ -550,19 +516,23 @@ class AScanViewerGUI:
 		_plot_frame = ttk.Frame(self.window)
 		_plot_frame.pack(side=tk.TOP,fill=tk.BOTH,expand=True,padx=10,pady=5)
 		
-		#Matplotlib 도화지 Figufre 생성
+		#Matplotlib 도화지 Figufre 생성 (좌 3개: ROI, Whole, FFT / 우 1개: B-Scan)
+
 		self.fig = matplotlib.figure.Figure(figsize=(12, 4.8), dpi=100)#액자 1200px,600px
-		gs = GridSpec(2,2, figure = self.fig, width_ratios=[1,1.2])#오른쪽열 가로폭, 왼쪽열보다 1.2배 넓게 설정
-		self.ax_whole = self.fig.add_subplot(gs[0,0])#좌상단
-		self.ax_fft = self.fig.add_subplot(gs[1,0])#좌하단
-		self.ax_roi = self.fig.add_subplot(gs[:,1])#우측전체
+		gs = GridSpec(3, 2, figure = self.fig, width_ratios=[1,1.3])#오른쪽열 가로폭, 왼쪽열보다 1.2배 넓게 설정
+
+		self.ax_roi = self.fig.add_subplot(gs[0,0])
+		self.ax_whole = self.fig.add_subplot(gs[1,0])#좌상단
+		self.ax_fft = self.fig.add_subplot(gs[2,0])#좌하단
+		self.ax_bscan = self.fig.add_subplot(gs[:,1])#우측전체
 
 		self.set_plot_style()
 		
 		#이를 Tkinter 창 내부에 집어넣기 위해 FigureCanvasTkAgg라는 '연결 다리(도화지)'
 		self.canvas=FigureCanvasTkAgg(figure = self.fig, master = _plot_frame)
 		self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
+		# Matplotlib Mouse Motion Event 바인딩 (CTRL + Mouse Hover 연동)
+		self.canvas.mpl_connect('motion_notify_event', self.on_bscan_mouse_move)
 		#Matpolotlib 툴바(확대,이동,저장버튼)추가
 		_toolbar = matplotlib.backends.backend_tkagg.NavigationToolbar2Tk(self.canvas,window=_plot_frame)
 		_toolbar.update()
@@ -571,43 +541,44 @@ class AScanViewerGUI:
 	def set_plot_style(self):
 		#초기 1회만 : 축, 격자, 빈 선 Line 셋팅
 
-		#1 : 좌상단 Raw Signal 그래프 셋팅
-		self.ax_whole.set_title("Whole Signal",fontsize=9,fontweight='bold')
-		self.ax_whole.set_xlabel("Index", fontsize=7)
-		self.ax_whole.set_ylabel("Amplitude",fontsize=7)
-		self.ax_whole.set_ylim(-32768,32768)
-		self.ax_whole.grid(True, linestyle='--',alpha=0.5)
-			
-		# Line 객체 최초 단 1회 생성(고속 업데이트용 참조 보유)
-		self.line_whole_signal = self.ax_whole.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
-		self.line_whole_env = self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
-		self.ax_whole.legend(loc='upper right', fontsize = 7)
-		self.line_align_marker = self.ax_whole.axvline(x=0, color='black', linestyle=':', linewidth=1, visible=True)
-		self.line_inverse_marker = self.ax_whole.axvline(x=0, color='purple', linestyle=':', linewidth=1, visible=False)
-			
-		#2 : 좌하단 FFT Spectrum 그래프 셋팅
-		self.ax_fft.set_title("FFT Frequency Domain",fontsize=9,fontweight='bold')
-		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=7)
-		self.ax_fft.set_ylabel("Magnitude",fontsize=7)
-		self.ax_fft.set_xlim(0,100)# 초음파 주파수 대역인 0~100MHz 범위 표시
-		self.ax_fft.grid(True,linestyle='--',alpha=0.5) 
-
-		self.line_whole_fft = self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
-		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
-
-		#3. ROI Detail Chart
+		#1. ROI Detail Chart (좌상단)
 		self.ax_roi.set_title("ROI Align",fontsize=10,fontweight='bold')
-		self.ax_roi.set_xlabel('Index',fontsize=8)
-		self.ax_roi.set_ylabel('Ampltitude',fontsize=8)
+		self.ax_roi.set_xlabel('Index',fontsize=7)
+		self.ax_roi.set_ylabel('Ampltitude',fontsize=7)
 		self.ax_roi.set_ylim(-32768,32768)
 		self.ax_roi.grid(True, linestyle='--', alpha=0.5)
 		self.ax_roi.set_xlim(-self.config.align_pre_samples,self.config.align_post_samples)
-
 		#ROI Line객체도 단 1회 생성 및 보관(포인터 재활용)
 		self.line_roi_signal = self.ax_roi.plot([],[],color='#1f77b4',linewidth=1.0,label="Signal")[0]
 		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0] #label과 칼라가 다르네
 		self.ax_roi.legend(loc='upper right',fontsize=6)
 
+		#2. Raw Signal 그래프 셋팅 (좌중단)
+		self.ax_whole.set_title("Whole Signal",fontsize=9,fontweight='bold')
+		self.ax_whole.set_xlabel("Index", fontsize=7)
+		self.ax_whole.set_ylabel("Amplitude",fontsize=7)
+		self.ax_whole.set_ylim(-32768,32768)
+		self.ax_whole.grid(True, linestyle='--',alpha=0.5)
+		self.ax_whole.legend(loc='upper right', fontsize = 7)
+		self.line_whole_signal = self.ax_whole.plot([],[],color='#1f77b4',linewidth=0.8,label="Signal")[0]
+		self.line_whole_env = self.ax_whole.plot([],[],color='#ff7f0e', linewidth=1.2, linestyle='--', label="Envelope")[0]
+		self.line_align_marker = self.ax_whole.axvline(x=0, color='black', linestyle=':', linewidth=1, visible=True)
+		self.line_inverse_marker = self.ax_whole.axvline(x=0, color='purple', linestyle=':', linewidth=1, visible=False)
+			
+		#3. FFT Spectrum 그래프 셋팅 (좌하단)
+		self.ax_fft.set_title("FFT Frequency Domain",fontsize=9,fontweight='bold')
+		self.ax_fft.set_xlabel("Frequency Mhz", fontsize=7)
+		self.ax_fft.set_ylabel("Magnitude",fontsize=7)
+		self.ax_fft.set_xlim(0,100)# 초음파 주파수 대역인 0~100MHz 범위 표시
+		self.ax_fft.grid(True,linestyle='--',alpha=0.5) 
+		self.line_whole_fft = self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
+		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
+
+		#4. B-Scan Plot
+		self.ax_bscan.set_title("B SCAN", fontsize=12, fontweight = 'bold')
+		self.ax_bscan.set_xlabel("Scan Index (Collum)", fontsize=8)
+		self.ax_bscan.set_ylabel("Dpeth Samples",fontsize=8)
+		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00',linestyle='-', linewidth=1.5, visible=False)
 
 		self.fig.tight_layout()
 		
@@ -638,91 +609,114 @@ class AScanViewerGUI:
 			self.line_roi_env.set_xdata(self.roi_x)
 
 			# FFT Y축 스케일 조절 : n sample -> fft y limit auto calibration
-			_est_peak = (32768.0 * 90.0) / len(self.shared_sample_indices)
+			_est_peak = (32768.0 * 90.0) / max(1, len(self.shared_sample_indices))
 			_dynamic_fft_ylim = math.floor(_est_peak / 100.0) * 100 #100 단위 내림
 			_fft_ylim_max = max(100, _dynamic_fft_ylim - 100)# 최소 100보장
 			self.ax_fft.set_ylim(0, _fft_ylim_max)  # FFT Y축도 절대 기준으로 고정!
+
+			#B스캔 이미지 렌더링
+			self.render_bscan()
 	
 			#첫번째 0번 Row그래프 출력
-			self.display_ascan(col_index_in = 0)
+			self.select_ascan_column(col_index_in = 0)
 			
 		except Exception as e:
 			messagebox.showerror("Error",f"Failed to  load CSV file:\n{str(e)}")
+
+	def render_bscan(self):
+		bscan_2d = BScanProcessor.generate_bscan_2d(self.ascan_list)
+		if bscan_2d.size ==0 : 
+			print(f"B Scan 이미지 생성 실패")
+			return
+		
+		# [xmin, xmax, ymin(Top), ymax(Bottom)]
+		extent_bounds = [0, self.total_cols - 1, self.config.align_post_samples, -self.config.align_pre_samples]
+
+		#이미 imshow 객체가 존재하는 경우, 데이터 및 축 범위만 재설정
+		if self.bscan_img_display is not None : 
+			self.bscan_img_display.set_data(bscan_2d)
+			self.bscan_img_display.set_extent(extent_bounds)
+		else:
+			#최초 1회만 imshow 랜더링
+			#B-Scan 2D Gray Image 출력 : (AxesImage 객체) imshow 객체는 화면에 그린 2차원 이미지 레이어의 조작용 핸들
+			self.bscan_img_display = self.ax_bscan.imshow(
+				bscan_2d,
+				cmap='gray',
+				aspect = 'auto',
+				origin = 'upper',
+				extent = [0, self.total_cols -1, self.config.align_post_samples, -self.config.align_pre_samples]
+			)
 			
+			#self.ax_bscan.set_xlim(0,self.total_cols-1)
+			#self.ax_bscan.set_ylim(self.config.align_post_samples, -self.config.align_pre_samples))
+
+		self.line_bscan_cursor.set_visible(True)
+
+	def on_bscan_mouse_move(self, event_in) : 
+		'''CTRL 키 누른 상태로, B-Scan 이동 시 이벤트 연동'''
+		if event_in.inaxes == self.ax_bscan and event_in.key == 'control' :
+			if event_in.xdata is not None:
+				col_idx = int(round(event_in.xdata))
+				if 0<= col_idx < self.total_cols :
+					self.spin_col.delete(0, tk.End)
+					self.spin_col.insert(0, str(col_idx)) #0 즉 맨 앞에 str(col_idx)를 넣어라.
+					self.select_ascan_column(col_index_in = col_idx)
+
+
 	def _on_enter_pressed(self, event_L):
 		self.on_col_change()
 		
 	def on_col_change(self):
 		"""스핀박스 숫자 변경시 자동 실행"""
 		if self.ascan_list is None :
+			print(f'AScan 임포트 된 게 없습니다')
 			return
 		try:
 			_col_idx = int(self.spin_col.get())
 			if 0 <= _col_idx < len(self.ascan_list):
-				self.display_ascan(col_index_in = _col_idx)
+				self.select_ascan_column(col_index_in = _col_idx)
 			else:
 				messagebox.showerror("Warning",f"Index out of Range(0~{len(self.ascan_list)-1})")
 		except ValueError as e:
 			messagebox.showerror("Error", e.__str__())
 			
-	def display_ascan(self, col_index_in : int):
+	def select_ascan_column(self, col_index_in : int):
 		self.current_ascan = self.ascan_list[col_index_in]
+
+		#B-Scan 내 커서 이동
+		if self.line_bscan_cursor : 
+			self.line_bscan_cursor.set_xdata([col_index_in,col_index_in])
 		self.update_plots_new()
-		self.canvas.draw()
+		self.canvas.draw_idle() #고속 UI 반응을 위한
 		
 	def on_view_mode_change(self):
 		#모드 토글시 화면 즉시 전환
 		if self.current_ascan is not None:
 			print(f"Raw/Filtered 토글합니다")
 			self.update_plots_new()
-			self.canvas.draw()
-
+			self.canvas.draw_idle()
 
 	def on_align_method_change_new(self):
 		#핵심 : Align 선택 변경시, 전체 데이터셋 일관 재계산 실행
 		selected_method = self.config.align_method = self.align_method_var.get()
-		print(f"Align 방법 변경합니다. 다시 모든 빔 연산합니다.")
+		print(f"Align 방법 : f{selected_method}으로 변경합니다. 다시 모든 빔 연산합니다.")
 
 		if self.ascan_list :
 			#전체 AScan 데이터셋 일괄 ROI/ TGC 버퍼 업데이트
-			pre = self.config.align_pre_samples
-			post = self.config.align_post_samples
-			tgc_gain = self.csv_reader.tgc_gain_linear_ROI
+			pre, post = self.config.align_pre_samples, self.config.align_post_samples
+			tgc_gain_array = self.csv_reader.tgc_gain_linear_ROI
 
 			for a_scan in self.ascan_list : 
-				a_scan.update_roi_buffer(selected_method, pre, post, tgc_gain)
+				a_scan.update_roi_buffer(selected_method, pre, post, tgc_gain_array)
 
+			self.render_bscan()
 			self.update_plots_new()
-			self.canvas.draw()
+			self.canvas.draw_idle()
+
 		else:
 			messagebox.showerror("Error",f" ascan들이 import되지 않았습니다")
 
-			
-	# def on_align_method_change(self):
-	# 	self.config.align_method = self.align_method_var.get()
-
-	# 	if self.current_ascan is not None:
-	# 		self.update_plots_new()
-	# 		self.canvas.draw()
-
-	# def update_roi_buffer(self, signal_in : np.ndarray, env_in : np.ndarray, align_idx : int) :
-	# 	'''기존 buffer를 그대로 재사용'''
-	# 	#초기화
-	# 	self.roi_y_signal[:] = 0.0
-	# 	self.roi_y_env[:]  = 0.0
-
-	# 	raw_start = align_idx - self.config.align_pre_samples
-	# 	raw_end = align_idx + self.config.align_post_samples
-
-	# 	sig_start = max(0, raw_start)
-	# 	sig_end = min(len(signal_in), raw_end)
-
-	# 	roi_start = sig_start - raw_start #항상 0 이상
-	# 	roi_end = roi_start + (sig_end - sig_start)
-
-	# 	self.roi_y_signal[roi_start:roi_end] = signal_in[sig_start:sig_end]	
-	# 	self.roi_y_env[roi_start:roi_end] = env_in[sig_start:sig_end]
-
+		
 	def update_plots_new(self):
 
 		_mode = self.view_mode_var.get()
@@ -733,16 +727,16 @@ class AScanViewerGUI:
 			_env_data = self.current_ascan.raw_envelope_data
 			_fft_data = self.current_ascan.fft_magnitude
 			_peak_freq = self.current_ascan.center_freq_Mhz
-			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
-			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
+			self.ax_whole.set_title(f"Raw AScan Signal",fontsize=8, fontweight='bold')
+			self.ax_fft.set_title(f"Raw FFT : Peak={_peak_freq:.1f}Mhz")
 
 		else: # "filtered"
 			_sig_data = self.current_ascan.filtered_data
 			_env_data = self.current_ascan.filtered_envelope_data
 			_fft_data = self.current_ascan.filtered_fft_magnitude
 			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
-			self.ax_whole.set_title(f"1.Filtered AScan Signal",fontsize=8, fontweight='bold')
-			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
+			self.ax_whole.set_title(f"Filtered AScan Signal",fontsize=8, fontweight='bold')
+			self.ax_fft.set_title(f"Filtered FFT : Peak={_peak_freq:.1f}Mhz")
 
 		#1. whole AScan 업데이트
 		self.line_whole_signal.set_ydata(_sig_data)
@@ -758,105 +752,45 @@ class AScanViewerGUI:
 			self.ax_roi.set_title(f"ROI Align : None but 0")
 		else :
 			if self.current_ascan.phase_inverse != None :
-				self.line_inverse_marker.set_xdata([self.current_ascan.phase_inverse, self.current_ascan.phase_inverse])
+				inverse_pos = self.current_ascan.phase_inverse
+				self.line_inverse_marker.set_xdata([inverse_pos, inverse_pos])
 				self.line_inverse_marker.set_visible(True)
-				self.ax_roi.set_title(f"ROI Align : {align_idx}, Inverse : {self.current_ascan.phase_inverse}")
+				self.ax_roi.set_title(f"ROI Align : {align_idx}, Inverse : {inverse_pos}")
 			else:
 				self.line_inverse_marker.set_visible(False)
 				self.ax_roi.set_title(f"ROI Align : {align_idx}")
+		#공통
 		self.line_align_marker.set_xdata([align_idx,align_idx])
-
+		
 		#단일화된 ROI 버퍼 데이터 표시
 		if self.current_ascan.current_roi_signal is not None and self.current_ascan.current_roi_env is not None :
 			self.line_roi_signal.set_ydata(self.current_ascan.current_roi_signal)
 			self.line_roi_env.set_ydata(self.current_ascan.current_roi_env)
-	'''	
-	def update_plots(self):		
-		#토글에 따른 y축 배열 바인딩만수행 (속도 극대화)
-		_mode = self.view_mode_var.get()
-		#_col_idx = self.current_ascan.col_index
-		_align = self.align_method_var.get()
 
-		if _mode == 'raw':
-			_sig_data = self.current_ascan.raw_data
-			_env_data = self.current_ascan.raw_envelope_data
-			_fft_data = self.current_ascan.fft_magnitude
-			_peak_freq = self.current_ascan.center_freq_Mhz
-			self.ax_whole.set_title(f"1.Raw AScan Signal",fontsize=8, fontweight='bold')
-			self.ax_fft.set_title(f"2.Raw FFT : Peak={_peak_freq:.1f}Mhz")
-
-		else: # "filtered"
-			_sig_data = self.current_ascan.filtered_data
-			_env_data = self.current_ascan.filtered_envelope_data
-			_fft_data = self.current_ascan.filtered_fft_magnitude
-			_peak_freq = self.current_ascan.filtered_center_freq_Mhz	
-			self.ax_whole.set_title(f"1.Filtered AScan Signal",fontsize=8, fontweight='bold')
-			self.ax_fft.set_title(f"2.Filtered FFT : Peak={_peak_freq:.1f}Mhz")
-
-		#1. whole AScan 업데이트
-		self.line_whole_signal.set_ydata(_sig_data)
-		self.line_whole_env.set_ydata(_env_data)
-		
-		#2. FFT
-		self.line_whole_fft.set_ydata(_fft_data)
-		self.line_peak_freq.set_xdata([_peak_freq, _peak_freq])
-	
-		align_idx = self.current_ascan.get_align_index(self.config.align_method)
-
-		if align_idx == None : 
-			align_idx = 0
-			self.ax_roi.set_title(f"ROI Align : {None}")
-		else :
-			if self.current_ascan.phase_inverse != None :
-				self.line_inverse_marker.set_xdata([self.current_ascan.phase_inverse, self.current_ascan.phase_inverse])
-				self.line_inverse_marker.set_visible(True)
-				self.ax_roi.set_title(f"ROI Align {align_idx}, Inverse {self.current_ascan.phase_inverse}")
-			else:
-				self.line_inverse_marker.set_visible(False)
-				self.ax_roi.set_title(f"ROI Align {align_idx}")
-
-		self.line_align_marker.set_xdata([align_idx, align_idx])
-
-		#3. ROI 파형  업데이트
-		if _align == "envelope_peak":
-			self.roi_y_signal = self.current_ascan.tgc_ROI_Envelope
-			self.roi_y_env = self.current_ascan.env_tgc_ROI_Envelope
-		elif _align == "pos_max":
-			self.roi_y_signal = self.current_ascan.tgc_ROI_Max
-			self.roi_y_env = self.current_ascan.env_tgc_ROI_Max
-		elif _align == "neg_min":
-			self.roi_y_signal = self.current_ascan.tgc_ROI_min
-			self.roi_y_env = self.current_ascan.env_tgc_ROI_min
-		elif _align == "cross_corr":
-			self.roi_y_signal = self.current_ascan.tgc_ROI_Corr
-			self.roi_y_env = self.current_ascan.env_tgc_ROI_Corr
-					
-		#4. Line 포인터 교체	
-		self.line_roi_signal.set_ydata(self.roi_y_signal)
-		self.line_roi_env.set_ydata(self.roi_y_env)
-	'''
 	def run(self):
 		self.window.mainloop()
 
 #5. AScan 리스트로부터 메모리 효율적인 RGB 3차원 B-Scan 이미지를 생성하는 클래스
-
 class BScanProcessor : 
 	@staticmethod
-	def generate_bscan_rgb(ascan_list : List[AScan], enable_inverse_overlay : bool = False) -> np.ndarray :
-
-		if ascan_list is None or ascan_list[0].roi_bscan_bytes is None :
-			return np.array([])
-
+	def generate_bscan_2d(ascan_list : List[AScan]) -> np.ndarray:
+		if not ascan_list or ascan_list[0].roi_bscan_bytes is None:
+			messagebox.showerror("Error: B-Scan 만들 준비가 안되었습니다")
+			return np.array([[]]) #빈 2차원 NumPy 배열
 		num_cols = len(ascan_list)
 		roi_len = len(ascan_list[0].roi_bscan_bytes)
+		bscan_gray = np.zeros((roi_len, num_cols), dtype = np.uint8)#(높이, 너비) 크기를 가진 0으로 채워진 2차원 배열
 
-		#1차원 greyScale uint8 행렬 구축 (Nz, Nx)
-		#각 AScan의 8bit uint8 데이터를 열(collumn) 단위로 쌓음
-		bscan_gray = np.zeros((roi_len,num_cols), dtype=np.uint8)
+		for col_idx, ascan in enumerate(ascan_list):
+			if ascan.roi_bscan_bytes is not None:
+				bscan_gray[:,col_idx] = ascan.roi_bscan_bytes #2차원 배열의 c_idx번째 열(Column) 전체
+				#1차원 A-Scan 바이트 데이터를 2차원 이미지의 한 열에 세로 방향으로 할당
+		print(f"B Scan 흑백 이미지 구성이 완료되었습니다")
+		return bscan_gray#완성된 2차원 흑백(Gray) B-Scan 이미지를 반환
 		
 
 #실행부
 if __name__ == "__main__":
 	#app객체 생성
-	app = AScanViewerGUI()
+	app = UltrasoundSignalViewer()
 	app.run()
