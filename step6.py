@@ -38,13 +38,18 @@ class ExperimentConfig :
 	#step5-1 : TGC
 	tgc_enable : bool = False
 	tgc_start_sample_from_align : int = 0
-	tgc_slope_dB : float = 0.04 #샘플당 증폭개인(dB/Sample)
+	tgc_slope_dB : float = 0.02 #샘플당 증폭개인(dB/Sample)
 
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
 
 	#A Beam의 샘플 갯수
 	number_of_samples_in_Whole_Abeam : int = 0
+
+	#step6 : Phase Inverse 검색에서 하드코딩 제외
+	phase_inv_search_start_offset_from_align : int = 100
+	phase_inv_search_end_offset_from_align : int = 480
+
 
 class AlignIndices: # C-Struct형 Align 인덱스 저장 클래스
 	__slots__ = ('envelope_peak', 'pos_max', 'neg_min', 'cross_corr') #변수이름의 키
@@ -103,7 +108,13 @@ class AScan:
     # 🎯 독립된 개별 신호 처리 메서드 모음
     # ==========================================	
 
-	def compute_all_align_indices(self, ref_template : Optional[np.ndarray] = None, _condition0 : float = -0.4, _condition1 : float = 1.0, _condition2 : float = 0.15):
+	def compute_all_align_indices(
+			self, ref_template : Optional[np.ndarray] = None, 
+			_condition0 : float = -0.4, 
+			_condition1 : float = 1.0, 
+			_condition2 : float = 0.15,
+			inv_search_start: int = 100,
+			inv_search_end: int = 500):
 		'''4가지 방식의 Align Index를 __slots__객체 속성에 빠르게 셋팅'''
 		# if self.filtered_data is None or self.filtered_envelope_data is None:#align 대상은 : 반드시 밴드패스 거친
 		# 	print(f"[Warning] BANDPASS 필터 연산이 실패했습니다")
@@ -127,8 +138,8 @@ class AScan:
 			self.align_indices.cross_corr = pos_idx
 
 			#메인 파형 영향권을 벗어난 100~+500 구간 정의
-			search_start = pos_idx + 100
-			search_end = min(pos_idx + 500, len(_corr))
+			search_start = pos_idx + inv_search_start
+			search_end = min(pos_idx + inv_search_end, len(_corr))
 
 			if search_start < search_end:	
 
@@ -242,7 +253,7 @@ class AScan:
 
 
 	@staticmethod
-	def apply_log_compression(data_in: np.ndarray, k : float = 0.003, dynamic_range_db : float = 30.0) -> np.ndarray :
+	def apply_log_compression(data_in: np.ndarray, k : float = 0.003, dynamic_range_db : float = 35.0) -> np.ndarray :
 	    
         #[메모리 최적화] Log Compression 처리 후 바로 8-bit 정수(np.uint8, 0~255)로 변환하여 반환
        
@@ -253,51 +264,26 @@ class AScan:
 		
 		# [1 단계] 입력 데이터 안전성 확보 (음수값이나 0에 의한 np.log10 에러 방지)
 		data_safe = np.maximum(data_in, 0.0)
-		# [2 단계] 기본 Log Compression 계산: S_out = 20 * log10(1 + k * S_in)
+		# 2. Log Scaling (dB 변환)
 		_data_log = 20.0 * np.log10(1.0+ k * data_safe)
-		#k가 커질 때 (예: $k = 0.1$ ~ $1.0$): 로그 곡선이 매우 급격히 꺾입니다. 작은 신호(내부 결함, 노이즈)를 폭발적으로 끌어올려 밝게 만들고, 큰 신호는 강하게 누릅니다.
-		#k가 작아질 때 (예: $k = 0.0001$ ~ $0.001$): 로그 곡선이 직선(Linear)에 가까워집니다. 미세 신호 뻥튀기 효과가 줄어들고 큰 신호 위주로 선명해집니다.
 
-		# [3 단계] Dynamic Range Clipping (선택 옵션) : 
-		# 특정 dB 이하의 미세 노이즈를 0으로 자르고 상한선을 제한
-		#최대 피크 신호 대비 몇 dB까지의 신호만 화면에 보여줄 것인가
-		#dynamic_range_db = 40.0으로 설정하면, 최고 신호보다 40dB 이상 작은 노이즈 및 자잘한 바닥 신호들은 완전히 검은색(0) 처리
-		#Log Compression으로 인해 함께 올라온 배경 바닥 노이즈를 깔끔하게 잘라내어(Clipping) 이미지의 대비(Contrast)를 또렷하게 만드는 역할
-		#if dynamic_range_db is not None:
+		# 3. Dynamic Range 기준점 설정
 		max_val = np.max(_data_log)
 		min_cutoff = max_val - dynamic_range_db
-			# cutoff 미만의 미세 노이즈는 cutoff 값으로 바닥을 맞 춤
-			#정해둔 최소값(min)보다 작은 값은 최소값으로, 최대값(max)보다 큰 값은 최대값으로
+
+		# 4. min_cutoff 이하 바닥 노이즈 자르기 (Clipping)
 		_data_log = np.clip(_data_log, min_cutoff, max_val)
-
-		# [4 단계] [0.0, 1.0] 범위 정규화 (Min-Max Normalization)
-		min_v = np.min(_data_log)
-		max_v = np.max(_data_log)
-
-		# 분모가 0이 되는 Zero-division 방지
-		if max_v - min_v > 1e-12:
-			# ($0.000000000001$)라는 0에 매우 가까운 극소값
-			# "최대값과 최소값의 차이가 0이 아니라 실제로 값이 존재하는가?
-			data_normalized = (_data_log - min_v) / (max_v - min_v)
-			#로그 압축이 완료된 임의의 범위 수치들을 최종 0.0 ~ 1.0 (Float) 표준 범위로 맞춥니다.
-		else : 
-			data_normalized = np.zeros_like(_data_log)
-			#기존에 존재하는 어떤 배열(Array)의 '모양(Shape)'과 '데이터 타입(dtype)'을 그대로 복사해서, 값만 전부 0으로 채워진 새 배열
 		
+		# 5. [0.0, 1.0] 범위 정규화 (min_cutoff -> 0.0 / max_val -> 1.0)
+		if dynamic_range_db > 0:
+			data_normalized = (_data_log - min_cutoff) / dynamic_range_db
+		else:
+			data_normalized = np.zeros_like(_data_log)
+			
 		_data_8bit_array = (data_normalized * 255.0).astype(np.uint8)
 
 		return _data_8bit_array
 
-	# def copy_roi_buffer(self, align_idx : int, pre_samples : int, post_samples : int, ROI : np.ndarray, signal : np.ndarray) :
-	# 	_raw_start = align_idx - pre_samples
-	# 	_raw_end = align_idx + post_samples
-	# 	sig_start = max(0, _raw_start)
-	# 	sig_end = min(len(signal), _raw_end)
-	# 	roi_start = sig_start - _raw_start #항상 0 이상
-	# 	roi_end = roi_start + (sig_end - sig_start)
-	# 	ROI[roi_start:roi_end] = signal[sig_start:sig_end]	
-					
-		
 	def process_full_pipeline(self,
 							sampling_rate:float, 
 							lowcut_Mhz:float, highcut_Mhz:float, order:int, 
@@ -305,6 +291,8 @@ class AScan:
 							tgc_gain_ndarray : np.ndarray,
 							fft_freqs_Mhz_in : Optional[np.ndarray] = None, 
 							ref_template : Optional[np.ndarray]=None,
+							inv_search_start_in : int = 100,
+							inv_search_end_in : int = 480
 							):
 		#최초 1회 사전 계산
 
@@ -323,7 +311,7 @@ class AScan:
 			print(f"[Warning] BANDPASS 필터 연산이 실패했습니다")
 						
 		#4. Align 인덱스 도출
-		self.compute_all_align_indices(ref_template = ref_template)
+		self.compute_all_align_indices(ref_template = ref_template,inv_search_start=inv_search_start_in,inv_search_end=inv_search_end_in)
 
 		# 선택된 Align 방법 기반 : 단일, ROI / TGC / Log Comrpession 버퍼 / B-scan용 8bit 계산
 		self.update_roi_buffer(align_method,pre_align, post_align, tgc_gain_ndarray)
@@ -401,7 +389,9 @@ class CSVReader:
 					tgc_gain_ndarray = self.tgc_gain_linear_ROI,
 					align_method= self.config.align_method,
 					pre_align=self.config.align_pre_samples,
-					post_align=self.config.align_post_samples)
+					post_align=self.config.align_post_samples,
+					inv_search_end_in=self.config.phase_inv_search_end_offset_from_align,
+					inv_search_start_in=self.config.phase_inv_search_start_offset_from_align)
 				ascan_list.append(ascan)
 
 			if len(ascan_list)==0:
@@ -426,7 +416,7 @@ class UltrasoundSignalViewer :
 		
 		self.window = tk.Tk()
 		self.window.title("Ultrasound Signal Processor : B Scan Analyzer")
-		self.window.geometry("1280x720")
+		self.window.geometry("1280x700")
 		
 		#데이터 분석 객체 생성
 		self.config = ExperimentConfig()
@@ -454,17 +444,24 @@ class UltrasoundSignalViewer :
 		self.line_roi_signal : Optional[Line2D] = None #ROI 파형
 		self.line_roi_env : Optional[Line2D] = None #ROI 엔벨롭
 
-		self.bscan_img_display = None
+		#step 6
+		self.bscan_img_display = None # 화면 패널 레이어(UI) AxesImage 객체 포인터
 		self.line_bscan_cursor : Optional[Line2D] = None #커서 직선
 
-		# #드로잉 버벅을 막기 위한
+		# #드로잉 버벅을 막기 위한 : Blitting & 스로틀링 고속화 변수
 		self.bscan_background = None #copy_from_bbox: B-Scan 이미지와 축, 눈금이 다 그려진 최종 픽셀 결과를 그래픽 메모리에 사진처럼 캡처(비트맵 저장)해
 		self.last_ascan_update_time = 0.0
+
+		#step6 : Phase Invsere Blue Overaly 토글 변수 : 기본값을 no_apply
+		self.phase_inverse_var = tk.StringVar(value="no_apply")
+
+		#step6 : B-Scan 1채널 흑백 버퍼 캐시 변수
+		self.bscan_2d_gray : Optional[np.ndarray] = None
 	
 		#화면 구성폼(버튼, 그래프)생성
 		self.create_widgets()
 		
-	def create_widgets(self):
+	def create_widgets(self) : #내가 컨트롤 할 필요 없는 것들을 여기에서 선언
 
 		#-------------------------------------
 		# 상단  Control Panel : 버튼 및 설정 영역
@@ -515,6 +512,13 @@ class UltrasoundSignalViewer :
 				command=self.on_align_method_change_new
 			).grid(row=r, column=c, padx=6, pady=2, sticky='w')#좌측정렬
 
+
+		#Step6 : 블루 어레이 apply : 상단
+		ttk.Separator(_control_frame,orient = 'vertical').grid(row=0,column=8,rowspan=2,sticky='ns',padx=15)
+		ttk.Label(_control_frame,text='Phase Inverse:', font=("Segoe UI",9,'bold')).grid(row=0,column=9,rowspan=2,padx=(0,5),pady=2)
+		ttk.Radiobutton(_control_frame,text="Blue Apply",variable=self.phase_inverse_var,value='blue',command=self.on_phase_inverse_toggle).grid(row=0,column=10,padx=6,pady=2,sticky='w')
+		ttk.Radiobutton(_control_frame, text="No Apply",variable=self.phase_inverse_var,value='no_apply',command=self.on_phase_inverse_toggle).grid(row=1,column=10,padx=6,pady=2,sticky='w')
+		
 		#-------------------------------------
 		# 하단  그래프 출력 영역 plot panel
 		#-------------------------------------
@@ -620,8 +624,8 @@ class UltrasoundSignalViewer :
 			_fft_ylim_max = max(100, _dynamic_fft_ylim - 100)# 최소 100보장
 			self.ax_fft.set_ylim(0, _fft_ylim_max)  # FFT Y축도 절대 기준으로 고정!
 
-			#B스캔 이미지 렌더링
-			self.render_bscan()
+			#B스캔 이미지 렌더링 : 처음 생성이므로, rebuild_gray=True 전달
+			self.render_bscan_new(rebuild_gray=True)
 	
 			#첫번째 0번 Row그래프 출력
 			self.select_ascan_column(col_index_in = 0)
@@ -629,34 +633,103 @@ class UltrasoundSignalViewer :
 		except Exception as e:
 			messagebox.showerror("Error",f"Failed to  load CSV file:\n{str(e)}")
 
-	def render_bscan(self):
-		bscan_2d = BScanProcessor.generate_bscan_2d(self.ascan_list)
-		if bscan_2d.size ==0 : 
-			print(f"B Scan 이미지 생성 실패")
-			return
+
+# '''
+# 	def render_bscan(self):
+# 		#1채널 : 흑백 원본 데이터 생성
+# 		bscan_2d = BScanProcessor.generate_bscan_2d_gray(self.ascan_list)
+# 		if bscan_2d.size ==0 : 
+# 			print(f"B Scan 이미지 생성 실패")
+# 			return
 		
+# 		# [xmin, xmax, ymin(Top), ymax(Bottom)]
+# 		extent_bounds = [0, self.total_cols - 1, self.config.align_post_samples, -self.config.align_pre_samples]
+
+# 		#이미 imshow 객체가 존재하는 경우, 데이터 및 축 범위만 재설정
+# 		if self.bscan_img_display is not None : 
+# 			self.bscan_img_display.set_data(bscan_2d)
+# 			self.bscan_img_display.set_extent(extent_bounds)
+# 		else:
+# 			#최초 1회만 imshow 랜더링
+# 			#B-Scan 2D Gray Image 출력 : (AxesImage 객체) imshow 객체는 화면에 그린 2차원 이미지 레이어의 조작용 핸들
+# 			self.bscan_img_display = self.ax_bscan.imshow(
+# 				bscan_2d,
+# 				cmap='gray',
+# 				aspect = 'auto',
+# 				origin = 'upper',
+# 				extent = [0, self.total_cols -1, self.config.align_post_samples, -self.config.align_pre_samples]
+# 			)
+			
+# 			#self.ax_bscan.set_xlim(0,self.total_cols-1)
+# 			#self.ax_bscan.set_ylim(self.config.align_post_samples, -self.config.align_pre_samples))
+
+# 		self.line_bscan_cursor.set_visible(True)
+
+# '''
+
+	def render_bscan_new(self, rebuild_gray : bool = False) :
+
+		"""
+		B-Scan 이미지 렌더링 및 Caching 적용
+		rebuild_gray: True일 경우에만 1채널 흑백 버퍼를 재계산함
+		"""
+
+		if not self.ascan_list : 
+			print(f"재료인 ascan_list가 없습니다")
+			return
+
+		# 2. [캐싱 및 재생성 조건]
+		# CSV 로드 / Align 변경 시에만 1채널 흑백 버퍼 재생성 (오타 수정: bscan_2d_gray)
+		if rebuild_gray == True or getattr(self, 'bscan_2d_gray', None) is None : 
+			## rebuild_gray가 True이거나, 기존 흑백 버퍼(bscan_2d_gray)가 메모리에 없을 때만 1채널 흑백 이미지를 새로 생성
+			self.bscan_2d_gray = BScanProcessor.generate_bscan_2d_gray(self.ascan_list)
+
+		# 3. 흑백 이미지 생성 실패 방어: 배열이 비어있거나 None이면 함수를 종료합니다.
+		if self.bscan_2d_gray.size == 0  or self.bscan_2d_gray is None :
+			print(f"render_bscan_new에서 B Scan 이미지 생성 실패. ")
+			return
+
+		#2. 토글상태 확인
+		is_blue_enabled = (self.phase_inverse_var.get() == "blue")
+		_display_data = None
+
+		#3. 최적화 : Blue Apply True 상태에서 조건부 데이터 준비
+		if is_blue_enabled:
+			# "blue" 토글이 켜진 경우만 1채널 흑백 데이터를 3채널 RGB로 확장하고 Blue 픽셀 오버레이 연산을 수행합니다.
+			_display_data = BScanProcessor.apply_phase_inverse_overlay(
+				bscan_gray = self.bscan_2d_gray,
+				ascan_list = self.ascan_list,
+				config = self.config,
+				enable_blue = is_blue_enabled)
+		else:
+			# "no_apply" 상태일 경우 추가 연산 없이 기존 1채널 흑백 버퍼(bscan_2d_gray)를 그대로 사용합니다.
+			_display_data = self.bscan_2d_gray
+
 		# [xmin, xmax, ymin(Top), ymax(Bottom)]
 		extent_bounds = [0, self.total_cols - 1, self.config.align_post_samples, -self.config.align_pre_samples]
 
-		#이미 imshow 객체가 존재하는 경우, 데이터 및 축 범위만 재설정
+		# 4. Matplotlib imshow 갱신 : [Matplotlib UI 고속 갱신 처리] 
 		if self.bscan_img_display is not None : 
-			self.bscan_img_display.set_data(bscan_2d)
+			# 이미 ax_bscan에 그려진 AxesImage 레이어가 존재하는 경우 (화면 재그리기 최소화)
+			self.bscan_img_display.set_data(_display_data)
 			self.bscan_img_display.set_extent(extent_bounds)
+
+			if is_blue_enabled == False:
+				# 3채널 RGB에서 1채널 Gray로 복귀 시 컬러맵을 'gray'로 확실하게 재설정합니다.
+				self.bscan_img_display.set_cmap('gray')
+
 		else:
-			#최초 1회만 imshow 랜더링
-			#B-Scan 2D Gray Image 출력 : (AxesImage 객체) imshow 객체는 화면에 그린 2차원 이미지 레이어의 조작용 핸들
+		 	# 8. 앱 실행 후 최초 1회만 imshow()를 생성하여 그래픽 객체 포인터(bscan_img_display)를 보관
 			self.bscan_img_display = self.ax_bscan.imshow(
-				bscan_2d,
-				cmap='gray',
+				_display_data,
+				cmap = 'gray',
 				aspect = 'auto',
 				origin = 'upper',
-				extent = [0, self.total_cols -1, self.config.align_post_samples, -self.config.align_pre_samples]
+				extent = extent_bounds
 			)
 			
-			#self.ax_bscan.set_xlim(0,self.total_cols-1)
-			#self.ax_bscan.set_ylim(self.config.align_post_samples, -self.config.align_pre_samples))
-
 		self.line_bscan_cursor.set_visible(True)
+
 
 	def on_canvas_draw(self, event_in):
 		#캔버스가 새로 그려질 때, BScan의 깨끗한 배경 메모리를 저장
@@ -673,6 +746,11 @@ class UltrasoundSignalViewer :
 	# 				self.spin_col.insert(0, str(col_idx)) #0 즉 맨 앞에 str(col_idx)를 넣어라.
 	# 				self.select_ascan_column(col_index_in = col_idx)
 
+	def on_phase_inverse_toggle(self) :
+		'''신규 추가 step 6 : 블루 오버레이 토글 변경 콜백'''
+		if self.ascan_list : 
+			self.render_bscan_new(rebuild_gray=False)
+			self.canvas.draw_idle()
 
 	def on_bscan_mouse_move_new(self, event_in) : 
 		'''CTRL 키 누른 상태로, B-Scan 이동 시 이벤트 연동'''
@@ -760,7 +838,9 @@ class UltrasoundSignalViewer :
 			for a_scan in self.ascan_list : 
 				a_scan.update_roi_buffer(selected_method, pre, post, tgc_gain_array)
 
-			self.render_bscan() #여기에서 새롭게 b 스캔 랜더링함
+			#ROI가 새로 갱신되어야 하므로, rebuild_gray = True 전달 필요
+
+			self.render_bscan_new(rebuild_gray=True) #여기에서 새롭게 b 스캔 랜더링함
 			self.update_plots_new()
 			self.canvas.draw_idle()
 
@@ -790,11 +870,14 @@ class UltrasoundSignalViewer :
 			self.ax_fft.set_title(f"Filtered FFT : Peak={_peak_freq:.1f}Mhz")
 
 		#1. whole AScan 업데이트
-		self.line_whole_signal.set_ydata(_sig_data)
-		self.line_whole_env.set_ydata(_env_data)
+		if _sig_data is not None:
+			self.line_whole_signal.set_ydata(_sig_data)
+		if _env_data is not None:
+			self.line_whole_env.set_ydata(_env_data)
 
 		#2. FFT
-		self.line_whole_fft.set_ydata(_fft_data)
+		if _fft_data is not None:
+			self.line_whole_fft.set_ydata(_fft_data)
 		self.line_peak_freq.set_xdata([_peak_freq,_peak_freq])
 	
 		align_idx = self.current_ascan.get_align_index(_align)
@@ -824,7 +907,7 @@ class UltrasoundSignalViewer :
 #5. AScan 리스트로부터 메모리 효율적인 RGB 3차원 B-Scan 이미지를 생성하는 클래스
 class BScanProcessor : 
 	@staticmethod
-	def generate_bscan_2d(ascan_list : List[AScan]) -> np.ndarray:
+	def generate_bscan_2d_gray(ascan_list : List[AScan]) -> np.ndarray:
 		'''1채널 흑백 버퍼 생성 (기존 유지)'''
 		if not ascan_list or ascan_list[0].roi_bscan_bytes is None:
 			messagebox.showerror("Error","B-Scan 만들 준비가 안되었습니다")
@@ -849,18 +932,26 @@ class BScanProcessor :
 		if not enable_blue:
 			return bscan_rgb
 		
-		#blue 오버레이 적용
+		#blue 오버레이 적용 (R=0, G=0, B=255)
 		
 		align_pre = config.align_pre_samples
 		roi_len = bscan_gray.shape[0]
+
 		for col_idx, ascan in enumerate(ascan_list):
 			if ascan.phase_inverse is not None:
+
+				# 현재 설정된 Align 기준점의 절대 위치를 가져옴
 				align_idx = ascan.get_align_index(config.align_method) or 0
 
 				#원본 파형 인덱스를 ROI 상대 인덱스로 변환
 				#ROI 시작점 : align_idx - align_pre
 				relative_idx = ascan.phase_inverse - (align_idx - align_pre)
-				bscan_rgb[relative_idx, col_idx] = [0, 0, 255]
+
+				#방어코드 인덱스 범위 확인
+				if 0<= relative_idx < roi_len :
+					bscan_rgb[relative_idx, col_idx] = [0, 0, 255]
+				else : print(f"Phase Index 검출된 좌표가, ROI를 벗어났습니다")
+		return bscan_rgb			
 
 	
 
