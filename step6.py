@@ -538,7 +538,7 @@ class UltrasoundSignalViewer :
 		self.set_plot_style()
 		
 		#이를 Tkinter 창 내부에 집어넣기 위해 FigureCanvasTkAgg라는 '연결 다리(도화지)'
-		self.canvas=FigureCanvasTkAgg(figure = self.fig, master = _plot_frame)
+		self.canvas = FigureCanvasTkAgg(figure = self.fig, master = _plot_frame)
 		self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 		# Matplotlib Mouse Motion Event 바인딩 (CTRL + Mouse Hover 연동)
 		self.canvas.mpl_connect('motion_notify_event', self.on_bscan_mouse_move_new)
@@ -733,24 +733,16 @@ class UltrasoundSignalViewer :
 
 	def on_canvas_draw(self, event_in):
 		#캔버스가 새로 그려질 때, BScan의 깨끗한 배경 메모리를 저장
-		if self.canvas : 
-			self.bscan_background = self.canvas.copy_from_bbox(self.ax_bscan.bbox) #copy_from_bbox: B-Scan 이미지와 축, 눈금이 다 그려진 최종 픽셀 결과를 그래픽 메모리에 사진처럼 캡처(비트맵 저장)
+		self.bscan_background = self.canvas.copy_from_bbox(self.ax_bscan.bbox) #copy_from_bbox: B-Scan 이미지와 축, 눈금이 다 그려진 최종 픽셀 결과를 그래픽 메모리에 사진처럼 캡처(비트맵 저장)
 
-	# def on_bscan_mouse_move(self, event_in) : 
-	# 	'''CTRL 키 누른 상태로, B-Scan 이동 시 이벤트 연동'''
-	# 	if event_in.inaxes == self.ax_bscan and event_in.key == 'control' :
-	# 		if event_in.xdata is not None:
-	# 			col_idx = int(round(event_in.xdata))
-	# 			if 0<= col_idx < self.total_cols :
-	# 				self.spin_col.delete(0, tk.END)
-	# 				self.spin_col.insert(0, str(col_idx)) #0 즉 맨 앞에 str(col_idx)를 넣어라.
-	# 				self.select_ascan_column(col_index_in = col_idx)
 
 	def on_phase_inverse_toggle(self) :
-		'''신규 추가 step 6 : 블루 오버레이 토글 변경 콜백'''
+		'''신규 추가 step 6 : phase inverse 오버레이 토글 변경 콜백'''
 		if self.ascan_list : 
 			self.render_bscan_new(rebuild_gray=False)
 			self.canvas.draw_idle()
+		else :
+			print(f"Phase Inverse Overlay는 csv 파일 로드 후 하셔야 합니다.")
 
 	def on_bscan_mouse_move_new(self, event_in) : 
 		'''CTRL 키 누른 상태로, B-Scan 이동 시 이벤트 연동'''
@@ -814,16 +806,18 @@ class UltrasoundSignalViewer :
 
 		#B-Scan 내 커서 이동
 		if self.line_bscan_cursor : 
-			self.line_bscan_cursor.set_xdata([col_index_in,col_index_in])
+			self.line_bscan_cursor.set_xdata([col_index_in, col_index_in])
 		self.update_plots_new()
 		self.canvas.draw_idle() #고속 UI 반응을 위한다고 하지만, artist()보다는 느림
 		
 	def on_view_mode_change(self):
-		#모드 토글시 화면 즉시 전환
+		#Raw/Filtered 모드 토글시 화면 즉시 전환
 		if self.current_ascan is not None:
 			print(f"Raw/Filtered 토글합니다")
 			self.update_plots_new()
 			self.canvas.draw_idle()
+		else : 
+			print(f"Raw/Filtered 모드 토글 하시려면, 먼저 csv 파일 Load 하세요")
 
 	def on_align_method_change_new(self):
 		#핵심 : Align 선택 변경시, 전체 데이터셋 일관 재계산 실행
