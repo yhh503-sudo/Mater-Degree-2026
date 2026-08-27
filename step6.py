@@ -452,7 +452,7 @@ class UltrasoundSignalViewer :
 		self.bscan_background = None #copy_from_bbox: B-Scan 이미지와 축, 눈금이 다 그려진 최종 픽셀 결과를 그래픽 메모리에 사진처럼 캡처(비트맵 저장)해
 		self.last_ascan_update_time = 0.0
 
-		#step6 : Phase Invsere Blue Overaly 토글 변수 : 기본값을 no_apply
+		#step6 : Phase Invsere Red Overaly 토글 변수 : 기본값을 no_apply
 		self.phase_inverse_var = tk.StringVar(value="no_apply")
 
 		#step6 : B-Scan 1채널 흑백 버퍼 캐시 변수
@@ -516,7 +516,7 @@ class UltrasoundSignalViewer :
 		#Step6 : 블루 어레이 apply : 상단
 		ttk.Separator(_control_frame,orient = 'vertical').grid(row=0,column=8,rowspan=2,sticky='ns',padx=15)
 		ttk.Label(_control_frame,text='Phase Inverse:', font=("Segoe UI",9,'bold')).grid(row=0,column=9,rowspan=2,padx=(0,5),pady=2)
-		ttk.Radiobutton(_control_frame,text="Blue Apply",variable=self.phase_inverse_var,value='blue',command=self.on_phase_inverse_toggle).grid(row=0,column=10,padx=6,pady=2,sticky='w')
+		ttk.Radiobutton(_control_frame,text="Red Apply",variable=self.phase_inverse_var,value='red',command=self.on_phase_inverse_toggle).grid(row=0,column=10,padx=6,pady=2,sticky='w')
 		ttk.Radiobutton(_control_frame, text="No Apply",variable=self.phase_inverse_var,value='no_apply',command=self.on_phase_inverse_toggle).grid(row=1,column=10,padx=6,pady=2,sticky='w')
 		
 		#-------------------------------------
@@ -581,7 +581,7 @@ class UltrasoundSignalViewer :
 		self.ax_fft.set_ylabel("Magnitude",fontsize=7)
 		self.ax_fft.set_xlim(0,100)# 초음파 주파수 대역인 0~100MHz 범위 표시
 		self.ax_fft.grid(True,linestyle='--',alpha=0.5) 
-		self.line_whole_fft = self.ax_fft.plot([],[],color='#d62728',linewidth=1.0)[0]
+		self.line_whole_fft = self.ax_fft.plot([],[],color='black',linewidth=1.0)[0]
 		self.line_peak_freq = self.ax_fft.axvline(x=0,color='#2ca02c',linestyle='--',linewidth=1.5,alpha=0.85,label='Peak Freq')
 
 		#4. B-Scan Plot
@@ -680,8 +680,8 @@ class UltrasoundSignalViewer :
 
 		# 2. [캐싱 및 재생성 조건]
 		# CSV 로드 / Align 변경 시에만 1채널 흑백 버퍼 재생성 (오타 수정: bscan_2d_gray)
-		if rebuild_gray == True or getattr(self, 'bscan_2d_gray', None) is None : 
-			## rebuild_gray가 True이거나, 기존 흑백 버퍼(bscan_2d_gray)가 메모리에 없을 때만 1채널 흑백 이미지를 새로 생성
+		if rebuild_gray == True or self.bscan_2d_gray is None :  # getattr(객체, "찾을변수이름", 변수가없을때_반환할_기본값)
+			## rebuild_gray가 True이거나, 기존 흑백 버퍼(bscan_2d_gray)가 메모리에 없을 때만 1채널 흑백 	이미지를 새로 생성
 			self.bscan_2d_gray = BScanProcessor.generate_bscan_2d_gray(self.ascan_list)
 
 		# 3. 흑백 이미지 생성 실패 방어: 배열이 비어있거나 None이면 함수를 종료합니다.
@@ -690,17 +690,17 @@ class UltrasoundSignalViewer :
 			return
 
 		#2. 토글상태 확인
-		is_blue_enabled = (self.phase_inverse_var.get() == "blue")
+		is_red_enabled = (self.phase_inverse_var.get() == "red")
 		_display_data = None
 
-		#3. 최적화 : Blue Apply True 상태에서 조건부 데이터 준비
-		if is_blue_enabled:
-			# "blue" 토글이 켜진 경우만 1채널 흑백 데이터를 3채널 RGB로 확장하고 Blue 픽셀 오버레이 연산을 수행합니다.
+		#3. 최적화 : Red Apply True 상태에서 조건부 데이터 준비
+		if is_red_enabled:
+			# "red" 토글이 켜진 경우만 1채널 흑백 데이터를 3채널 RGB로 확장하고 Red 픽셀 오버레이 연산을 수행합니다.
 			_display_data = BScanProcessor.apply_phase_inverse_overlay(
 				bscan_gray = self.bscan_2d_gray,
 				ascan_list = self.ascan_list,
 				config = self.config,
-				enable_blue = is_blue_enabled)
+				enable_red = is_red_enabled)
 		else:
 			# "no_apply" 상태일 경우 추가 연산 없이 기존 1채널 흑백 버퍼(bscan_2d_gray)를 그대로 사용합니다.
 			_display_data = self.bscan_2d_gray
@@ -714,7 +714,7 @@ class UltrasoundSignalViewer :
 			self.bscan_img_display.set_data(_display_data)
 			self.bscan_img_display.set_extent(extent_bounds)
 
-			if is_blue_enabled == False:
+			if is_red_enabled == False:
 				# 3채널 RGB에서 1채널 Gray로 복귀 시 컬러맵을 'gray'로 확실하게 재설정합니다.
 				self.bscan_img_display.set_cmap('gray')
 
@@ -924,15 +924,15 @@ class BScanProcessor :
 		return bscan_gray#완성된 2차원 흑백(Gray) B-Scan 이미지를 반환
 
 	@staticmethod
-	def apply_phase_inverse_overlay(bscan_gray : np.ndarray, ascan_list : List[AScan], config : ExperimentConfig, enable_blue : bool) -> np.ndarray:
-		'''Draw 직전 호출 : 1채널 Gray를 3채널로 확장후, Phase Inverse 지점에 Blue 오버레이'''
+	def apply_phase_inverse_overlay(bscan_gray : np.ndarray, ascan_list : List[AScan], config : ExperimentConfig, enable_red : bool) -> np.ndarray:
+		'''Draw 직전 호출 : 1채널 Gray를 3채널로 확장후, Phase Inverse 지점에 Red 오버레이'''
 		#1. 1채널(H,W) -> 3채널 (H,W,3) RGB로 확장
 		bscan_rgb  = np.stack([bscan_gray]*3,axis=-1)
 
-		if not enable_blue:
+		if not enable_red:
 			return bscan_rgb
 		
-		#blue 오버레이 적용 (R=0, G=0, B=255)
+		#red 오버레이 적용 (R=255, G=0, B=0)
 		
 		align_pre = config.align_pre_samples
 		roi_len = bscan_gray.shape[0]
@@ -949,7 +949,7 @@ class BScanProcessor :
 
 				#방어코드 인덱스 범위 확인
 				if 0<= relative_idx < roi_len :
-					bscan_rgb[relative_idx, col_idx] = [0, 0, 255]
+					bscan_rgb[relative_idx, col_idx] = [255, 0, 0]
 				else : print(f"Phase Index 검출된 좌표가, ROI를 벗어났습니다")
 		return bscan_rgb			
 
