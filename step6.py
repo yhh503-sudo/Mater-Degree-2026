@@ -41,7 +41,7 @@ class ExperimentConfig :
 	tgc_slope_dB : float = 0.02 #샘플당 증폭개인(dB/Sample)
 
 	#신규 : ref.csv 파일 경로 추가
-	ref_template_csv_path : str = "Material csv(26.07.28)/ref.csv"
+	ref_template_csv_path : str = "Document 26.09.01/ref.csv"
 
 	#A Beam의 샘플 갯수
 	number_of_samples_in_Whole_Abeam : int = 0

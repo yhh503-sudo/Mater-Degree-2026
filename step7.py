@@ -16,7 +16,7 @@ import ctypes
 import time
 
 #SciPy 신호처리 모듈
-from scipy.signal import butter, hilbert, filtfilt
+from scipy.signal import butter, hilbert, filtfilt, sosfilt
 from typing import Optional, NamedTuple, Tuple 
 
 #1. Align 인덱스 구조체 : 3D Volumetric 전용 Y,X : 2D Map
@@ -78,29 +78,89 @@ class UltrasoundDataCube :
 
 		#4.Phase Inversion : 깊이 좌표 2D Map int16 할당
 		self.phase_inverse :np.ndarray = np.full((self.nY,self.nX),-1, dtype=np.int16) #모든값 -1로 채움.
-
+		#-1 로 채움
 # ==============================================================================
 # 3. High-Speed Data Reader (int16 Direct Memory Loading)
 # ==============================================================================
 
+class CSVReader:
+	'''
+	CSV 파일 파싱 및 DataCube int16 메모리 직접 로딩 클래스
+	'''
 
+	#staticmethod
+	def read_bscan_csv(file_path : str, cube : UltrasoundDataCube, y_idx : int =0) -> None:
+		'''단일 B-Scan csv 파일을 읽어서, DataCube의 y_idx 층에 int 16 변환 후 즉시 할당'''
+		if os.path.exists(file_path) == False :
+			raise FileNotFoundError(f"파일 경로가 잘못되었습니다 : {file_path}")
 
+		#C-engine 기반 파싱 후 int16 타입으로 로드
+		bscan_matrix = np.genfromtxt(file_path,delimiter=',',dtype=np.int16)
 
+		if bscan_matrix.ndim == 1:#CSV 파일에 A-Scan 파형이 단 1개 행(Row)만 들어있
+			bscan_matrix = bscan_matrix.reshape(1,-1)#차원 형태(Shape)는 1개의 AScan인 (Z_samples,)가 됩
 
+		n_cols_read, samples_in_ABeam = bscan_matrix.shape
+		X_limit = min(n_cols_read,	   cube.nX)
+		Z_limit = min(samples_in_ABeam, cube.nZ)
 
+		#int16 메모리 슬라이스에 직접 복사
+		cube.raw_data[y_idx, : X_limit, :Z_limit,] = bscan_matrix[:X_limit,:Z_limit,]
+		cube.row_index = y_idx
+		cube.col_index = X_limit-1
 
+	@staticmethod
+	def read_volume_csv_folder(folder_path:str, cube : UltrasoundDataCube, file_extension:str = ".csv")->None :
+		'''폴더 내 여러 B-Scan csv 파일들을 3D 큐브에 순차 로드'''
+		if os.path.exists(folder_path) == False :
+			raise FileNotFoundError(f"파일 경로가 잘못되었습니다 : {folder_path}")
+		file_list = sorted([
+			os.path.join(folder_path,fstring) for fstring in os.listdir(folder_path)
+			if fstring.endswith(file_extension)
+		])
 
+		'''
+		'112.csv' -> y_idx = 0
+		'113.csv' -> y_idx = 1
+		'''	
+		y_limit = min(len(file_list), cube.nY)
+		for y_idx in range(y_limit) : #y_limit만 루프를 돕니다
+			CSVReader.read_bscan_csv(file_list[y_idx], cube, y_idx = y_idx)
 
+# ==============================================================================
+# 4. Ultra-Fast Processing Engine (int16 -> float32 C-API 캐스팅 및 벡터화 연산)
+# ==============================================================================
+class CubeProcessor : 
+	'''
+	UltrasoundDataCube 내의 배열 데이터를 일괄 /고속 연산하는 알고리즘 집합
+	'''
+	@staticmethod
+	def apply_bandpass_filter(cube : UltrasoundDataCube, lowcut:float, highcut :float, fs:float, order:int =4)-> None:
+		#3D RawData(int16)을 float32로 C-Level 캐스팅하며, Z축 전체를 동시 밴드패스 필터링'
+		sos = butter(order,[lowcut,highcut],btype='bandpass',fs=fs,output='sos')
 
+		if cube.filtered_data is None or cube.filtered_data.shape != cube.raw_data.shape:
+			cube.filtered_data = np.empty(cube.raw_data.shape,dtype=np.float32,order='C')
 
+		#raw_data(int16)->float32 실시간 캐스팅 후, C-module의 sosfilt 실행
+		sosflit(sos, cube.raw_data.astype(np.float32),axis=-1,out=cube.filtered_data)
 
+	@staticmethod
+	def compute_envelope(cube: UltrasoundDataCube, target:str = 'filtered') -> None:
+		'''힐베르트 기반 변환 3D Envelope 큐브 일괄 생성'''
 
+		if target == 'filtered' and cube.filtered_data is not None:
+			src = cube.filtered_data
+		else:
+			rsc = cube.raw_data.astype(np.float32)
 
+		analytic_signal = hilbert(src,axis=-1)
+		envelope = np.abs(analytic_signal).astype(np.float32)
 
-
-
-
-
+		if target == 'filtered':
+			cube.filtered_envelope_data = envelope
+		else:
+			cube_raw_envelope_data = envelope
 
 
 
