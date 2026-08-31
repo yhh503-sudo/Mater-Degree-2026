@@ -17,6 +17,101 @@ import time
 
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
+from typing import Optional, NamedTuple, Tuple 
+
+#1. Align 인덱스 구조체 : 3D Volumetric 전용 Y,X : 2D Map
+## 이름으로 접근 가능 NamedTuple : __dict__를 만들지 않고 튜플 구조 그대로 저장되기 때문에 __slots__를 쓴 것처럼 메모리 용량을 최소한으로 사용
+class AlignIndices3D(NamedTuple):
+	peak_max : np.ndarray   #Shape (nY, nX) : int16
+	first_peak : np.ndarray #Shape (nY, nX) : int16
+	threshold : np.ndarray  #Shape (nY, nX) : int16
+	cross_corr : np.ndarray #Shape (nY, nX) : int16
+
+
+class UltrasoundDataCube : 
+	'''
+	연산 함수가 배제된 순수 배열 컨테이너
+	__slots__를 적용해, 딕셔너리 __dict__ 오버헤드를 완전히 제거함
+	'''
+	__slots__ = (
+		'nY','nX','nZ',
+		'raw_data','row_index','col_index',
+		'raw_data','raw_data','raw_data',
+		'fft_magnitude', 'center_freq_Mhz', 'raw_envelope_data',
+        'filtered_data', 'filtered_fft_magnitude', 'filtered_center_freq_Mhz', 'filtered_envelope_data',
+        'align_indices', 'current_roi_signal', 'current_roi_env', 'roi_bscan_bytes',
+        'phase_inverse'
+	)
+	def __init__(self, n_rows:int = 1, n_cols:int=1000, sample_len:int = 2048):
+		'''
+		n_rows : Y축 스캔 라인 수. B스캔의 경우 1로 설정
+		n_cols : X축 위치 수 (B-Scan 내 AScan 개수)
+		salmple_len : AScan 깊이 샘플 수
+		'''
+		#0. Raw 위치 & 위치 데이터 : int16 사용으로 메모리 50%절감. C-contiguous 메모리 할당
+		self.raw_data: np.ndarray = np.zeros((self.nY, self.nX, self.nZ), dtype=np.int16, order='C')
+		self.row_index : int = 0
+		self.col_index : int = 0
+
+		#1. RAW 파형 분석 결과
+		self.fft_magnitude: Optional[np.ndarray] = None
+		self.center_freq_Mhz: Optional[np.ndarray] = None
+		self.raw_envelope_data: Optional[np.ndarray] = None
+
+		# 2. Filtered 파형 분석 결과 (신호처리 정밀도를 위해 float32 유지)
+		self.filtered_data: Optional[np.ndarray] = None
+		self.filtered_fft_magnitude: Optional[np.ndarray] = None
+		self.filtered_center_freq_Mhz: Optional[np.ndarray] = None
+		self.filtered_envelope_data: Optional[np.ndarray] = None
+
+		# 3. Align 위치 및 ROI / B-Scan / C-Scan 버퍼 (int16 할당)
+		self.align_indices: AlignIndices3D = AlignIndices3D(
+			peak_max=np.zeros((self.nY, self.nX), dtype=np.int16),
+			first_peak=np.zeros((self.nY, self.nX), dtype=np.int16),
+			threshold=np.zeros((self.nY, self.nX), dtype=np.int16),
+			cross_corr=np.zeros((self.nY, self.nX), dtype=np.int16)
+        )
+
+		self.current_roi_signal:Optional[np.ndarray] = None #Shape (nY,nX,ROI_Z) : float32
+		self.current_roi_env:Optional[np.ndarray] = None #Shape (nY,nX,ROI_Z) : float32
+		self.roi_bscan_bytes : Optional[np.ndarray] = None #Shape (nY,nX,ROI_Z, 3) : uint8 1byte
+
+		#4.Phase Inversion : 깊이 좌표 2D Map int16 할당
+		self.phase_inverse :np.ndarray = np.full((self.nY,self.nX),-1, dtype=np.int16) #모든값 -1로 채움.
+
+# ==============================================================================
+# 3. High-Speed Data Reader (int16 Direct Memory Loading)
+# ==============================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # 실험 장비 및 환경 설정 관리 클래스
 @dataclass(slots=True)
