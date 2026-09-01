@@ -22,26 +22,69 @@ from typing import Optional, NamedTuple, Tuple
 #1. Align 인덱스 구조체 : 3D Volumetric 전용 Y,X : 2D Map
 ## 이름으로 접근 가능 NamedTuple : __dict__를 만들지 않고 튜플 구조 그대로 저장되기 때문에 __slots__를 쓴 것처럼 메모리 용량을 최소한으로 사용
 class AlignIndices3D(NamedTuple):
+	#__slots__ 및 dict__ 오버헤드가 없는 C-Struct  수준의 경량 데이터 구조체
+	#모든 멤버는 (nY, nX) Shape 의 int16인 Numpy 배열
 	peak_max : np.ndarray   #Shape (nY, nX) : int16
 	first_peak : np.ndarray #Shape (nY, nX) : int16
 	threshold : np.ndarray  #Shape (nY, nX) : int16
 	cross_corr : np.ndarray #Shape (nY, nX) : int16
 
-
+## 2. Pure Data Container (메모리 레이아웃 절감 및 데이터 관리)
 class UltrasoundDataCube : 
 	'''
-	연산 함수가 배제된 순수 배열 컨테이너
-	__slots__를 적용해, 딕셔너리 __dict__ 오버헤드를 완전히 제거함
+	연산 함수가 배제된 순수 배열 컨테이너 : 3D (nY, nX, nZ) Pure Data 컨테이너
+	__slots__를 통한 메모리 오버헤드 방지 및 C-Contiguous 레이아웃 유지 : 텐서가 메모리에서 연속적으로 저장되는
 	'''
 	__slots__ = (
 		'nY','nX','nZ',
 		'raw_data','row_index','col_index',
 		'raw_data','raw_data','raw_data',
-		'fft_magnitude', 'center_freq_Mhz', 'raw_envelope_data',
-        'filtered_data', 'filtered_fft_magnitude', 'filtered_center_freq_Mhz', 'filtered_envelope_data',
+		'fft_magnitude', 'center_freq_MHz', 'raw_envelope_data',
+        'filtered_data', 'filtered_fft_magnitude', 'filtered_center_freq_MHz', 'filtered_envelope_data',
         'align_indices', 'current_roi_signal', 'current_roi_env', 'roi_bscan_bytes',
-        'phase_inverse'
+        'phase_inverse_map'
 	)
+
+	def __init__(self, nY : int, nX : int, nZ : int):
+
+		self.nY = nY
+		self.nX = nX
+		self.nZ = nZ
+
+		#16bit signed int 기반 RawData(50% 메모리 절감, order = 'C')
+		self.raw_data = np.zeros((nY, nX, nZ), dtype=np.int16,order='C')
+
+		# Signal Processing 결과 버퍼 (필요 시 할당)
+		self.filtered_data: Optional[np.ndarray] = None
+		self.filtered_envelope_data: Optional[np.ndarray] = None
+
+		# ROI 추출 버퍼
+		self.current_roi_signal: Optional[np.ndarray] = None #Shape (nY,nX,ROI_Z) : float32
+		self.current_roi_env: Optional[np.ndarray] = None
+
+		# FFT 버퍼
+		self.fft_magnitude: Optional[np.ndarray] = None
+		self.filtered_fft_magnitude: Optional[np.ndarray] = None
+
+		# Align Map 초기화 (int16 사용)
+		self.align_indices = AlignIndices3D(
+            peak_max=np.zeros((nY, nX), dtype=np.int16),
+            first_peak=np.zeros((nY, nX), dtype=np.int16),
+            threshold=np.zeros((nY, nX), dtype=np.int16),
+            cross_corr=np.zeros((nY, nX), dtype=np.int16)
+        )
+
+		# Phase Inversion 초기화 (-1: Unset 플래그 유지를 위해 int16 필수)
+		self.phase_inverse_map = np.full((nY, nX), -1, dtype=np.int16)
+
+		# UI 출력용 B-Scan RGB Bytes 버퍼
+		self.roi_bscan_bytes: Optional[np.ndarray] = None
+
+
+		# 현재 슬라이스 포인터
+		self.row_index = 0
+		self.col_index = 0
+
 	def __init__(self, n_rows:int = 1, n_cols:int=1000, sample_len:int = 2048):
 		'''
 		n_rows : Y축 스캔 라인 수. B스캔의 경우 1로 설정
@@ -50,18 +93,20 @@ class UltrasoundDataCube :
 		'''
 		#0. Raw 위치 & 위치 데이터 : int16 사용으로 메모리 50%절감. C-contiguous 메모리 할당
 		self.raw_data: np.ndarray = np.zeros((self.nY, self.nX, self.nZ), dtype=np.int16, order='C')
+		#Row-major order / C 언어 방식 : 3차원 배열 (nY, nX, nZ) 기준으로 마지막 차원인 nZ 축의 데이터가 메모리에 바로 옆으로 연달아 저장
+		#[y=0, x=0, z=0] -> [y=0, x=0, z=1] -> ... -> [y=0, x=0, z=nZ-1] -> [y=0, x=1, z=0] -> ...
 		self.row_index : int = 0
 		self.col_index : int = 0
 
 		#1. RAW 파형 분석 결과
 		self.fft_magnitude: Optional[np.ndarray] = None
-		self.center_freq_Mhz: Optional[np.ndarray] = None
+		self.center_freq_MHz: Optional[np.ndarray] = None
 		self.raw_envelope_data: Optional[np.ndarray] = None
 
 		# 2. Filtered 파형 분석 결과 (신호처리 정밀도를 위해 float32 유지)
 		self.filtered_data: Optional[np.ndarray] = None
 		self.filtered_fft_magnitude: Optional[np.ndarray] = None
-		self.filtered_center_freq_Mhz: Optional[np.ndarray] = None
+		self.filtered_center_freq_MHz: Optional[np.ndarray] = None
 		self.filtered_envelope_data: Optional[np.ndarray] = None
 
 		# 3. Align 위치 및 ROI / B-Scan / C-Scan 버퍼 (int16 할당)
@@ -98,8 +143,9 @@ class CSVReader:
 		bscan_matrix = np.genfromtxt(file_path,delimiter=',',dtype=np.int16)
 
 		if bscan_matrix.ndim == 1:#CSV 파일에 A-Scan 파형이 단 1개 행(Row)만 들어있
-			bscan_matrix = bscan_matrix.reshape(1,-1)#차원 형태(Shape)는 1개의 AScan인 (Z_samples,)가 됩
-
+			bscan_matrix = bscan_matrix.reshape(1,-1)
+			#shape = (1000,) : 1차원 (행도 열도 없는 일렬 데이터) -> shape = (1, 1000) : 2차원 (1행 1000열 매트릭스)
+		
 		n_cols_read, samples_in_ABeam = bscan_matrix.shape
 		X_limit = min(n_cols_read,	   cube.nX)
 		Z_limit = min(samples_in_ABeam, cube.nZ)
@@ -130,6 +176,19 @@ class CSVReader:
 # ==============================================================================
 # 4. Ultra-Fast Processing Engine (int16 -> float32 C-API 캐스팅 및 벡터화 연산)
 # ==============================================================================
+
+
+class CubeProcessor : 
+	#UltrasoundDataCube를 다루는 순수 연산 로직 엔진
+
+
+
+
+
+
+
+
+
 class CubeProcessor : 
 	'''
 	UltrasoundDataCube 내의 배열 데이터를 일괄 /고속 연산하는 알고리즘 집합
@@ -143,6 +202,7 @@ class CubeProcessor :
 			cube.filtered_data = np.empty(cube.raw_data.shape,dtype=np.float32,order='C')
 
 		#raw_data(int16)->float32 실시간 캐스팅 후, C-module의 sosfilt 실행
+		#"""Z축(axis=-1) 방향 Butterworth Bandpass 필터링"""
 		sosflit(sos, cube.raw_data.astype(np.float32),axis=-1,out=cube.filtered_data)
 
 	@staticmethod
@@ -152,7 +212,7 @@ class CubeProcessor :
 		if target == 'filtered' and cube.filtered_data is not None:
 			src = cube.filtered_data
 		else:
-			rsc = cube.raw_data.astype(np.float32)
+			src = cube.raw_data.astype(np.float32)
 
 		analytic_signal = hilbert(src,axis=-1)
 		envelope = np.abs(analytic_signal).astype(np.float32)
@@ -160,17 +220,78 @@ class CubeProcessor :
 		if target == 'filtered':
 			cube.filtered_envelope_data = envelope
 		else:
-			cube_raw_envelope_data = envelope
+			cube.raw_envelope_data = envelope
 
 
+	@staticmethod
+	def compute_fft_and_center_freq(cube : UltrasoundDataCube, fs:float, target : str = 'filered') -> None:
+		#pocketFFT  기반 초고속 3D FFT 및 스펙트럼 중심주파수 2D Map 산출
+		if target == 'filtered' and cube.filtered_data is not None:
+			src = cube.filtered_data
+		else :
+			src = cube.raw_data.astype(np.float32)
 
+		fft_complex = sfft.rfft(src,axis=-1, workers=-1)
+		fft_mag = np.abs(fft.complex).astype(np.float32)
 
+		n_samples = src.shape[-1]
+		freqs = sfft.rfftfreq(n_samples, d = 1.0/fs) / 1e6 #MHz 단위로 변환
 
+		sum_mag = np.sum(fft_mag,axis=-1, keepdims=False)
+		sub_mag_safe = np.where(sum_mag ==0, 1.0, sum_mag)
+		center_freq = np.sum(fft_mag * freqs, aixs=-1) / sum_mag_safe
 
+		if target == 'filtered' : 
+			cube.filtered_fft_magnitude = fft_mag
+			cube.filtered_center_freq_MHz= center_freq.astype(np.float32)
+		else:
+			cube.fft_magnitude = fft_mag
+			cube.center_freq_MHz = center_freq.astype(np.float32)
 
+	@staticmethod
+	def extract_roi_data (cube : UltrasoundDataCube, selected_align_map : np.ndarray, roi_start_offset : int, roi_len : int) -> None :
+		# Align 2D Map (int16) 정렬 위치 기준으로  ROI 영역만 3D Slicing 일괄 추출
 
+		nY,nX,nZ = cube.raw_data.shape
 
+		#Advanced Indexing 용 매쉬 그리드 생성 (int16 정수 인덱스 정상 지원)
+		y_indices = np.arnage(nY)[:, None, None]
+		x_indices = np.arange(nX)[None,:,None]
 
+		z_offsets = roi_start_offset + np.arange(roi_len)
+		z_indices = selected_align_map[:,:,None] + z_offsets[None,None,:]
+		z_indices = np.clip(z_indices,0,nZ-1) #인덱스 범위 초과 방지
+
+		if cube.filtered_data is not None :
+			src_signal = cube.filtered_data 	
+		else : src_signal = cube.raw_data.astype(np.float32)
+
+		if cube.filtered_data is not None : 
+			src_env = cube.filtered_envelope_data
+		else : 
+			src_env = cube.raw_envelope_data
+
+		cube.current_roi_signal = src_signal[y_indices, x_indices, z_indices]
+		if src_env is not None:
+			cube.current_roi_env = src_env[y_indices, x_indices, z_indices]
+
+	@staticmethod
+	def generate_bscan_bytes_ui(cube : UltrasoundDataCube) -> None:
+		'''UI 및 OpenCV 출력을 위한 8-bit uint8 B-Scan RGB 이밎지 변환'''
+		if cube.current_roi_env is None :
+			return
+
+		roi_data = cube.current_roi_env
+		min_v, max_v = np.min(roi_data), np.max(roi_data)
+
+		if max_v != min_v :
+			diff = max_v - min_v
+		else : 
+			diff = 1.0
+
+		normalized = np.clip((roi_data - min_v)/diff * 255.0,0,255).astype(np.uint8)
+		cube.roi_bscan_bytes = np.stack([normalized]*3,axis=-1) #NumPy에서 음수 인덱스는 "뒤에서부터 첫 번째 차원(가장 마지막 차원)"
+		## [RGB 3채널 복사] 동일한 흑백 레이어 3개를 마지막 축(axis=-1)에 쌓아 RGB 포맷 생성
 
 
 # 실험 장비 및 환경 설정 관리 클래스
