@@ -633,40 +633,6 @@ class UltrasoundSignalViewer :
 		except Exception as e:
 			messagebox.showerror("Error",f"Failed to  load CSV file:\n{str(e)}")
 
-
-# '''
-# 	def render_bscan(self):
-# 		#1채널 : 흑백 원본 데이터 생성
-# 		bscan_2d = BScanProcessor.generate_bscan_2d_gray(self.ascan_list)
-# 		if bscan_2d.size ==0 : 
-# 			print(f"B Scan 이미지 생성 실패")
-# 			return
-		
-# 		# [xmin, xmax, ymin(Top), ymax(Bottom)]
-# 		extent_bounds = [0, self.total_cols - 1, self.config.align_post_samples, -self.config.align_pre_samples]
-
-# 		#이미 imshow 객체가 존재하는 경우, 데이터 및 축 범위만 재설정
-# 		if self.bscan_img_display is not None : 
-# 			self.bscan_img_display.set_data(bscan_2d)
-# 			self.bscan_img_display.set_extent(extent_bounds)
-# 		else:
-# 			#최초 1회만 imshow 랜더링
-# 			#B-Scan 2D Gray Image 출력 : (AxesImage 객체) imshow 객체는 화면에 그린 2차원 이미지 레이어의 조작용 핸들
-# 			self.bscan_img_display = self.ax_bscan.imshow(
-# 				bscan_2d,
-# 				cmap='gray',
-# 				aspect = 'auto',
-# 				origin = 'upper',
-# 				extent = [0, self.total_cols -1, self.config.align_post_samples, -self.config.align_pre_samples]
-# 			)
-			
-# 			#self.ax_bscan.set_xlim(0,self.total_cols-1)
-# 			#self.ax_bscan.set_ylim(self.config.align_post_samples, -self.config.align_pre_samples))
-
-# 		self.line_bscan_cursor.set_visible(True)
-
-# '''
-
 	def render_bscan_new(self, rebuild_gray : bool = False) :
 
 		"""
