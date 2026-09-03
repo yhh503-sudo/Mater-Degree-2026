@@ -25,12 +25,12 @@ from typing import Optional, NamedTuple, Tuple
 @dataclass(slots=True)
 class ExperimentConfig:
 	sampling_rate: float = 1e9  # 1 GHz
-    probe_center_freq: float = 45e6  # 45 MHz
+	probe_center_freq: float = 45e6  # 45 MHz
     bit_depth: int = 15
     
     # Filter Cutoff (MHz)
-    filter_lowcut_Mhz: float = 20.0
-    filter_highcut_Mhz: float = 70.0
+	filter_lowcut_Mhz: float = 20.0
+	filter_highcut_Mhz: float = 70.0
     filter_order: int = 2
 
     # Align Settings ('envelope_peak' or 'cross_corr')
@@ -56,23 +56,28 @@ class ExperimentConfig:
 class UltrasoundCubeEngine:
 	def __init__(self, config: ExperimentConfig):
 		self.config = config
-        
+
+		#3D Cube Dimension
+        self.num_rows : int = 0
+        self.num_cols : int = 0
+        self.num_samples : int = 0
+		
 		# 3D Cubes: (Rows, Cols, Samples)
 		self.raw_cube: Optional[np.ndarray] = None
 		self.filtered_cube: Optional[np.ndarray] = None
-        self.env_cube: Optional[np.ndarray] = None
-        self.roi_cube_8bit: Optional[np.ndarray] = None
+		self.env_cube: Optional[np.ndarray] = None
+		self.roi_cube_8bit: Optional[np.ndarray] = None
         
         # 2D Align Maps (Rows, Cols): envelope_peak, cross_corr 2개만 관리
-        self.align_map_envelope_peak: Optional[np.ndarray] = None
-        self.align_map_cross_corr: Optional[np.ndarray] = None
+		self.align_map_envelope_peak: Optional[np.ndarray] = None
+		self.align_map_cross_corr: Optional[np.ndarray] = None
         
         # 2D Phase Inverse Map (Rows, Cols)
-        self.phase_inv_map: Optional[np.ndarray] = None
+		self.phase_inv_map: Optional[np.ndarray] = None
         
         # Shared Axes & Ref Signal
-        self.shared_fft_freqs_Mhz: Optional[np.ndarray] = None#self.line_whole_fft.set_xdata
-        self.shared_sample_indices: Optional[np.ndarray] = None #self.line_whole_signal.set_xdata
+		self.shared_fft_freqs_Mhz: Optional[np.ndarray] = None#self.line_whole_fft.set_xdata
+		self.shared_sample_indices: Optional[np.ndarray] = None #self.line_whole_signal.set_xdata
 		self.ref_template: Optional[np.ndarray] = None # 1D
         
 	def load_files_to_cube(self, file_paths: List[str]) -> bool :
@@ -124,6 +129,12 @@ class UltrasoundCubeEngine:
         # int16 raw_cube를 입력받아 float32 반환
         return filtfilt(b, a, self.raw_cube, axis=-1).astype(np.float32)
 
+	def extract_envelope(self, input_cube: np.ndarray) -> np.ndarray:
+            """필터링된 CUBE 신호로부터 Hilbert Transform을 사용하여 Envelope 추출"""
+        if input_cube is None:
+            raise ValueError("입력 CUBE 데이터가 None입니다.")
+
+        return np.abs(hilbert(input_cube, axis=-1)).astype(np.float32)
 
     def process_cube_pipeline(self):
         if self.raw_cube is None:
@@ -139,10 +150,96 @@ class UltrasoundCubeEngine:
         # ---------------------------------------------------------
         # Step 2. Envelope Extract
         # ---------------------------------------------------------
-        self.env_cube = np.abs(hilbert(self.filtered_cube, axis=-1)).astype(np.float32)
+        self.env_cube = self.extract_envelope(self.filtered_cube)
 
         # ---------------------------------------------------------
-        # Step 3 & 4. Align & ROI 갱신
+        # Step 3. 2D Align Index Map 생성 
         # ---------------------------------------------------------
         self.compute_align_maps()
+
+		# Step 4. ROI 추출 & TGC & Log Compression
         self.update_roi_cube()
+
+def compute_align_maps(self):
+
+	  #2가지만 사용 : 필터&엔벨롭된 파형에 대해 peak max / ref가지고 corr
+    num_rows, num_cols, num_samples = self.raw_cube.shape
+
+	# 1) Envelope Peak 방식:
+    # Bandpass -> Hilbert Envelope 거친 3D 배열에서 샘플 축(axis=-1) 기준 Max Index 도출
+    self.align_map_envelope_peak = np.argmax(self.env_cube, axis=-1).astype(int)
+
+	# 2) Cross Correlation 방식 (Ref 템플릿 존재 시):
+    # 초기화
+    self.align_map_cross_corr = np.zeros((num_rows, num_cols), dtype=int)
+    self.phase_inv_map = np.full((num_rows, num_cols), -1, dtype=int) #기본값 -1
+
+	if self.ref_template is not None:
+        inv_start = self.config.phase_inv_search_start_offset_from_align
+        inv_end = self.config.phase_inv_search_end_offset_from_align
+
+		for row_csv in range(num_rows):
+            for c in range(num_cols):
+                sig = self.filtered_cube[row_csv, c]
+                corr = np.correlate(sig, self.ref_template, mode='same')
+                pos_idx = int(np.argmax(corr))
+                self.align_map_cross_corr[row_csv, c] = pos_idx
+
+				# Phase Inversion 검출 (ROI 검색)
+                s_idx = pos_idx + inv_start
+                e_idx = min(pos_idx + inv_end, len(sig))
+
+				if s_idx < e_idx:
+                    roi_corr = corr[s_idx:e_idx]
+					min_rel_idx = np.argmin(roi_corr)
+					neg_val = roi_corr[min_rel_idx]
+					pos_val = corr[pos_idx]
+					max_val_roi = np.max(roi_corr)
+
+					_cond1 = neg_val < -0.4
+					_cond2 = abs(neg_val) > max_val_roi * 1.0
+					_cond3 = abs(neg_val) > pos_val * 0.15
+
+					if _cond1 and _cond2 and _cond3 : 
+						self.phase_inv_map[row_csv,c] = s_idx + min_rel_idx
+					self.phase_inv_map[row_csv, c] = s_idx + min_rel_idx
+
+	else:
+            # ref 템플릿이 없을 경우 envelope_peak 결과를 대체 복사
+            self.align_map_cross_corr = self.align_map_envelope_peak.copy()
+
+def get_current_align_map(self) -> np.ndarray :
+       #현재 선택된 align method 방식에 의해서, 2D int MAP 반환
+       if self.config.align_method == 'cross_corr' :
+              return self.align_map_cross_corr
+       #기본값 envelop_peak
+       return self.align_map_envelope_peak
+
+def update_roi_cube(self):
+       pre = self.config.align_pre_samples
+       post = self.config.align_post_samples
+       roi_len = pre + post
+
+	   roi_signal_cube = np.zeros((self.num_rows, self.num_cols, roi_len), dtype=np.float32)
+       active_align_map = self.get_current_align_map()
+
+	   #2D Align Map 기준으로 Fancy Indexing 처리하여 ROI 슬라이싱
+	for r in range(self.num_rows):
+       for c in range(self.num_cols):
+		   a_idx = active_align_map[r,c]
+                 
+           # CUBE 원본에서의 시작/끝 범위
+           r_start = a_idx - pre
+           r_end = a_idx + post
+
+            # 실제 CUBE 원본에서, 데이터 경계(Boundary) 제한
+	   		s_start = max(0,r_start)
+       		s_end = min(self.total_samples, r_end)
+
+            #roi_signal 내부에 복사될 위치 : Offset을 미리 계산
+            t_start = s_start - r_start #무조건 0 이상이지만, pre 보다 커질 수도 없다.
+            t_end = t_start + (s_end - s_start) #양수이고, pre+pre+post 보다 늘 작다.
+
+            #경계성 유효성 검사 후, 데이터 대입
+            if s_start < s_end :
+              roi_signal[r,c,t_start:t_end]  = = self.filtered_cube[r, c, s_start:s_end]
