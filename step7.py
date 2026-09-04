@@ -40,6 +40,11 @@ class ExperimentConfig :
 	tgc_start_sample_from_align : int = 0
 	tgc_slope_dB : float = 0.02 #샘플당 증폭개인(dB/Sample)
 
+    #Log Compression & Dynamic Range Setting
+	log_cmp_alpha : float = 0.003 # Log Scale 계수 (1 + alpha * env)
+	log_cmp_dynamic_range_dB : float = 35.0 #Dynamic Range dB
+	
+
 	#신규 : ref.csv 파일 경로 추가
 	ref_template_csv_path : str = "Document 26.09.01/ref.csv"
 
@@ -49,6 +54,11 @@ class ExperimentConfig :
 	#step6 : Phase Inverse 검색에서 하드코딩 제외
 	phase_inv_search_start_offset_from_align : int = 100
 	phase_inv_search_end_offset_from_align : int = 480
+	phase_inv_neg_threshold : float = -0.4 #음의 피크 최소 자체 조건
+	phase_inv_roi_ratio : float = 1.0 # ROI 내 Max Peak 대비 비율
+	phase_inv_whole_pos_ratio : float = 0.15 # 전체 신호 Pos Peak 대비 비율
+
+    
 
 # ==========================================
 # 2. 3D Cube Data Engine (2D Align ndarray 기반)
@@ -139,11 +149,48 @@ class UltrasoundCubeEngine :
 		_filtered_cube = filtfilt(b, a, self.raw_cube, axis=-1).astype(np.float32)
 		return _filtered_cube
 
+
 	def extract_envelope(self, input_cube : np.ndarray) -> np.ndarray : 
 		#필터링된 CUBE 신호로부터, 힐베르트 엔벨롭 추출
 		if input_cube is None:
 			raise ValueError("엔벨롭 대상 큐브가 없는 오류 입니다")
 		return np.abs(hilbert(input_cube,axis=-1)).astype(np.float32)
+
+	def apply_tgc(self, roi_signal_cube : np.ndarray) -> np.ndarray : 
+
+		#ROI Signl CUBE에 Depth TGC 적용
+		if not self.config.tgc_enable : 
+			return roi_signal_cube
+
+		roi_len = roi_signal_cube.shaple[-1]
+		indices = np.arange(roi_len)
+		depth_offset = np.maximum(0, indices - self.config.tgc_start_sample_from_align)
+		gain_dB = depth_offset * self.config.tgc_slope_dB
+		tgc_gain = (10.0 ** (gain_dB / 20.0)).astype(np.float32)
+
+		# In-place 곱셈 연산으로 메모리 효율 유지
+		roi_signal_cube *= tgc_gain
+		return roi_signal_cube
+
+	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
+		#"""Config Dynamic Range 파라미터를 적용한 Envelope 및 8-bit Log Compression"""
+		roi_env = np.abs(hilbert(roi_signal_cube, axis=-1))
+		data_safe = np.maximum(roi_env,0.0)
+
+		alpha = self.config.log_cmp_alpha
+		dr_dB = self.config.log_cmp_dynamic_range_dB
+
+		data_log = 20.0 * np.log10(1.0 + alpha * data_safe)
+
+		max_val = np.max(data_log)
+		min_cutoff = max_val - dr_dB
+		data_log = np.clip(data_log, min_cutoff, max_val)
+
+		norm_data = (data_log - min_cutoff) / dr_dB
+		_data_8bit =(norm_data * 255.0).astype(np.uint8)
+		return _data_8bit
+	
+	
 
 	def process_cube_pipeline(self) :
 		#3D 큐브 전체 연산 파이프라이
@@ -161,6 +208,7 @@ class UltrasoundCubeEngine :
 
 		#step4 선택된 Align method 기반 ROI 3D 큐브 추출 & TGC & Log Compression
 		self.update_roi_cube()
+
 
 	def compute_align_maps(self) -> None:
 		#1. Envelope Peak 방식 : Envelope의 Max Index  추출
