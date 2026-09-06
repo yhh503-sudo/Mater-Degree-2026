@@ -36,7 +36,7 @@ class ExperimentConfig :
 	align_post_samples: int = 500   #align 기준점 이후 샘플 개수
 	
 	#step5-1 : TGC
-	tgc_enable : bool = False
+	tgc_enable : bool = True
 	tgc_start_sample_from_align : int = 0
 	tgc_slope_dB : float = 0.02 #샘플당 증폭개인(dB/Sample)
 
@@ -143,7 +143,7 @@ class UltrasoundCubeEngine :
 		high = max(0.002, min((self.config.filter_highcut_Mhz * 1e6) / nyquist, 0.99))
 
 		if low >= high : 
-			high = min(low+0.01, 0.99)		
+			high = min(low + 0.01, 0.99)		
 
 		b,a = butter(self.config.filter_order, [low, high], btype='band')
 		_filtered_cube = filtfilt(b, a, self.raw_cube, axis=-1).astype(np.float32)
@@ -154,7 +154,9 @@ class UltrasoundCubeEngine :
 		#필터링된 CUBE 신호로부터, 힐베르트 엔벨롭 추출
 		if input_cube is None:
 			raise ValueError("엔벨롭 대상 큐브가 없는 오류 입니다")
-		return np.abs(hilbert(input_cube,axis=-1)).astype(np.float32)
+		_evn = np.abs(hilbert(input_cube,axis=-1)).astype(np.float32)
+		return _evn
+	
 
 	def apply_tgc(self, roi_signal_cube : np.ndarray) -> np.ndarray : 
 
@@ -174,8 +176,8 @@ class UltrasoundCubeEngine :
 
 	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
 		#"""Config Dynamic Range 파라미터를 적용한 Envelope 및 8-bit Log Compression"""
-		roi_env = np.abs(hilbert(roi_signal_cube, axis=-1))
-		data_safe = np.maximum(roi_env,0.0)
+		roi_env = np.abs(hilbert(roi_signal_cube, axis = -1))
+		data_safe = np.maximum(roi_env, 0.0)
 
 		alpha = self.config.log_cmp_alpha
 		dr_dB = self.config.log_cmp_dynamic_range_dB
@@ -222,6 +224,10 @@ class UltrasoundCubeEngine :
 			inv_start = self.config.phase_inv_search_start_offset_from_align
 			inv_end = self.config.phase_inv_search_end_offset_from_align
 
+			th_neg = self.config.phase_inv_neg_threshold
+			th_roi_ratio = self.config.phase_inv_roi_ratio
+			th_pos_ratio = self.config.phase_inv_whole_pos_ratio 
+
 			for r in range(self.num_rows):
 				for c in range(self.num_cols):
 					whole_sig = self.filtered_cube[r, c]
@@ -240,7 +246,13 @@ class UltrasoundCubeEngine :
 						pos_val_in_whole_sig = corr[pos_idx]
 						max_val_roi = np.max(roi_corr) #max 값 자체
 
-						if (neg_val < -0.4) and (abs(neg_val) > max_val_roi * 1.0) and (abs(neg_val) > pos_val_in_whole_sig * 0.15):
+						#Config 임계값 기반 판정
+						cond1 = neg_val < th_neg
+						cond2 = abs(neg_val) > (max_val_roi * th_roi_ratio)
+						cond3 = abs(neg_val) > (pos_val_in_whole_sig * th_pos_ratio)
+
+						if cond1 and cond2 and cond3 : 
+						#if (neg_val < -0.4) and (abs(neg_val) > max_val_roi * 1.0) and (abs(neg_val) > pos_val_in_whole_sig * 0.15):
 							self.phase_inv_map[r,c] = s_idx + min_rel_idx
 		else:
 			self.align_map_cross_corr = self.align_map_envelope_peak.copy()
@@ -256,7 +268,7 @@ class UltrasoundCubeEngine :
 		post = self.config.align_post_samples
 		roi_len = pre + post
 
-		roi_signal_cube = np.zeros((self.num_rows, self.num_cols, roi_len), dtype=np.float32)
+		roi_signal_cube = np.zeros((self.num_rows, self.num_cols, roi_len), dtype = np.float32)
 		active_align_map = self.get_current_align_map()
 
 		#2D Align Map 좌표 기준으로 Boundary-safe ROI 슬라이싱
@@ -283,23 +295,57 @@ class UltrasoundCubeEngine :
 					pass# zero padding
 
 		#TGC 적용
-		if self.config.tgc_enable:
-			indices = np.arange(roi_len)
-			depth_offset = np.maximum(0, indices - self.config.tgc_start_sample_from_align)
-			gain_dB = depth_offset * self.config.tgc_slope_dB
-			tgc_gain = (10.0 ** (gain_dB / 20.0)).astype(np.float32)
-			roi_signal_cube *= tgc_gain
+		# if self.config.tgc_enable:
+		# 	indices = np.arange(roi_len)
+		# 	depth_offset = np.maximum(0, indices - self.config.tgc_start_sample_from_align)
+		# 	gain_dB = depth_offset * self.config.tgc_slope_dB
+		# 	tgc_gain = (10.0 ** (gain_dB / 20.0)).astype(np.float32)
+		# 	roi_signal_cube *= tgc_gain
+
+		roi_signal_cube = self.apply_tgc(roi_signal_cube)
 
 		# ROI Envelope & 8-bit Log Compression
-		roi_env = np.abs(hilbert(roi_signal_cube, axis=-1))
-		data_safe = np.maximum(roi_env, 0.0)
-		data_log = 20.0 * np.log10(1.0 + 0.003 * data_safe)
-		max_val = np.max(data_log)
-		min_cutoff = max_val - 35.0
-		data_log = np.clip(data_log, min_cutoff, max_val)
-		norm_data = (data_log - min_cutoff) / 35.0
-		self.roi_cube_8bit = (norm_data * 255.0).astype(np.uint8)
+		# roi_env = np.abs(hilbert(roi_signal_cube, axis=-1))
+		# data_safe = np.maximum(roi_env, 0.0)
+		# data_log = 20.0 * np.log10(1.0 + 0.003 * data_safe)
+		# max_val = np.max(data_log)
+		# min_cutoff = max_val - 35.0
+		# data_log = np.clip(data_log, min_cutoff, max_val)
+		# norm_data = (data_log - min_cutoff) / 35.0
+		# self.roi_cube_8bit = (norm_data * 255.0).astype(np.uint8)
+
+		self.roi_cube_8bit = self.convert_to_8bit_log(roi_signal_cube)
 
 # ==========================================
 # 3. GUI Processor (Tkinter Interface)
 # ==========================================
+
+class UltrasoundSignalViewer:
+	def __init__(self) : 
+		self.window = tk.Tk()
+		self.window.title("Ultrasound Signal Processor : B Scan Rows Analyzer")
+		self.window.geometry("1280x700")
+
+		self.config = ExperimentConfig()
+		self.engine = UltrasoundCubeEngine(self.config)
+
+		self.current_row_idx = 0
+		self.current_col_idx = 0
+		self.view_mode_var = tk.StringVar(value = 'raw')
+		self.align_method_var = tk.StringVar(value = self.config.align_method)
+
+		#step6 :  최적화 & Phase Inverse 변수 정의
+		self.bscan_img_display : Optional[AxesImage] = None # 화면 패널 레이어 AxesImage 객체
+		self.line_bscan_cursor : Optional[Line2D] = None 	# B-Scan 커서
+		self.bscan_background = None						# Blitting  기법용 캡처 버퍼
+		self.last_ascan_update_time = 0.0					# 쓰트롤링 타임 스탬프
+
+		self.phase_inverse_var =tk.StringVar(value='no_apply') 	#Phase Inverse 토글 기본값
+		self.bscan_2d_gray : Optional[np.ndarray] = None 		# 1채널 흑백 버퍼 캐시
+
+		self.create_widgets()
+
+	def create_widgets(self) : 
+		#Control Panel Main Frame
+		control_frame = ttk.LabelFrame(self.window,text = 'Control Panel', padding =6)
+		control_frame.pack(side=tk.TOP, fill = tk.X, padx=10, pady =5)
