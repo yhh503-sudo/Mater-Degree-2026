@@ -91,6 +91,10 @@ class UltrasoundCubeEngine :
 		#2D Phase Inverse Map (Rows, Cols)
 		self.phase_inv_map : Optional[np.ndarray] = None
 
+		#3D FFT Magnitude Cubes (미리 선언)
+		self.raw_fft_mag_cube : Optional[np.ndarray] = None
+		self.filtered_fft_mag_cube : Optional[np.ndarray] = None #float32
+
 		#Shared Axes & Ref Signal
 		self.shared_fft_freqs_MHz : Optional[np.ndarray] = None
 		self.shared_sample_indices : Optional[np.ndarray] = None
@@ -187,6 +191,17 @@ class UltrasoundCubeEngine :
 		roi_signal_cube *= tgc_gain
 		return roi_signal_cube
 
+	def compute_fft_cubes(self) -> None:
+		#"""Raw 및 Filtered 3D Cube 전체에 대해 FFT Magnitudes를 사전 계산하여 저장"""
+		if self.raw_cube is None or self.filtered_cube is None:
+			raise ValueError("FFT 계산 실패: Raw 또는 Filtered CUBE가 준비되지 않았습니다.")
+
+		# Numpy Vectorized FFT (마지막 축인 Sample 축에 대해 실수 FFT 수행)
+		# np.abs()를 미리 적용.복소수 스펙트럼 대신 크기(Magnitude) 3D 배열로 저장
+		self.raw_fft_mag_cube = np.abs(np.fft.rfft(self.raw_cube, axis=-1)).astype(np.float32)
+		self.filtered_fft_mag_cube = np.abs(np.fft.rfft(self.filtered_cube, axis=-1)).astype(np.float32)
+
+
 	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
 		#"""Config Dynamic Range 파라미터를 적용한 Envelope 및 8-bit Log Compression"""
 		roi_env = np.abs(hilbert(roi_signal_cube, axis = -1))
@@ -218,10 +233,15 @@ class UltrasoundCubeEngine :
 		#step2 Envelope Extracet
 		self.env_cube = self.extract_envelope(self.filtered_cube)
 
-		#step3 2D Aligh Index Map 2개 구성 (envelope peak & cross corr)
+		#step3 FFT 3D CUBE 사전 연산 
+		self.compute_fft_cubes()
+
+
+		#step4 2D Aligh Index Map 2개 구성 (envelope peak & cross corr)
 		self.compute_align_maps()
 
-		#step4 선택된 Align method 기반 ROI 3D 큐브 추출 & TGC & Log Compression
+
+		#step5 선택된 Align method 기반 ROI 3D 큐브 추출 & TGC & Log Compression
 		self.update_roi_cube()
 
 
@@ -654,4 +674,4 @@ def run(self) :
 if __name__ == "__main__":
 	app = UltrasoundSignalViewer()
 	app.run()
-	
+
