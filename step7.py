@@ -390,7 +390,7 @@ class UltrasoundSignalViewer:
 
 		#Align method Frame
 		ttk.Label(control_frame,text='Align Method:',font=("Segoe UI", 9, "bold")).grid(row=0, column=5, padx=(0, 5), pady=2)
-		ttk.Radiobutton(control_frame,text='Evelope Peak',variable=self.align_method_var,value='envelope_leak',command=self.on_align_change).grid(row=0, column=6, padx=3, pady=2)
+		ttk.Radiobutton(control_frame,text='Evelope Peak',variable=self.align_method_var,value='envelope_peak',command=self.on_align_change).grid(row=0, column=6, padx=3, pady=2)
 		ttk.Radiobutton(control_frame, text ='Cross corr',variable=self.align_method_var,value='cross_corr',command=self.on_align_change).grid(row=0, column=7, padx=3, pady=2)
 
 		#Sperator 2
