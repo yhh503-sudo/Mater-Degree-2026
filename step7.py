@@ -71,7 +71,10 @@ class ExperimentConfig :
 
 class UltrasoundCubeEngine : 
 	def __init__(self, config: ExperimentConfig) -> None:
+
+
 		self.config = config
+		self.file_paths : list = None
 
 		# 3D CUBE Dimensions
 		self.num_rows :int =0
@@ -103,7 +106,6 @@ class UltrasoundCubeEngine :
 		self.shared_sample_indices : Optional[np.ndarray] = None
 		self.ref_template : Optional[np.ndarray] = None
 		self.file_paths : List[str] = []
-		
 
 	def load_files_to_cube(self, file_paths : List[str]) -> bool :
 
@@ -113,6 +115,8 @@ class UltrasoundCubeEngine :
 		try :
 			
 			#CUBE 차원 정보 설정 및 클래스 멤버 변수 저장
+
+			self.file_paths = file_paths
 			self.num_rows = len(file_paths)
 			df_first = pd.read_csv(file_paths[0], header=None)
 			self.num_cols = len (df_first)
@@ -420,8 +424,8 @@ class UltrasoundSignalViewer:
 		plot_frame = ttk.Frame(self.window)
 		plot_frame.pack(side=tk.TOP, fill=tk.BOTH,expand=True,padx=10,pady=5)
 
-		self.fig = matplotlib.Figure(figsize=(12,6), dpi=100)
-		gs = matplotlib.GridSpec(3,2,figure=self.fig,width_ratios=[1,1.2])
+		self.fig = matplotlib.figure.Figure(figsize=(12,6), dpi=100)
+		gs = GridSpec(3,2,figure=self.fig,width_ratios=[1,1.2])
 
 		self.ax_roi = self.fig.add_subplot(gs[0,0])
 		self.ax_whole = self.fig.add_subplot(gs[1,0])
@@ -430,7 +434,7 @@ class UltrasoundSignalViewer:
 
 		self.setup_plots()
 
-		self.canvas = matplotlib.FigureCanvasTkAgg(self.fig, master = plot_frame)
+		self.canvas = FigureCanvasTkAgg(self.fig, master = plot_frame)
 		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
 		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
 
@@ -450,7 +454,7 @@ class UltrasoundSignalViewer:
 		self.ax_roi.set_ylim(-32768,32768)
 	
 		#Whole AScan AXis
-		self.ax_whole.set_title('Raw Ascan', fontsize=9,fontsize=9, fontweight='bold')
+		self.ax_whole.set_title('Raw Ascan', fontsize=9, fontweight='bold')
 		self.ax_whole.grid(True, linestyle='--', alpha=0.5)
 		self.line_whole_sig = self.ax_whole.plot([], [], color='#1f77b4', lw=0.8)[0]
 		self.line_whole_env = self.ax_whole.plot([], [], color='#ff7f0e', lw=1.0, ls='--')[0]
@@ -477,6 +481,7 @@ class UltrasoundSignalViewer:
 		if not paths : return
 	
 		if self.engine.load_files_to_cube(list(paths)):
+
 			self.spin_row.config(from_=0, to=self.engine.num_rows - 1)
 			self.spin_col.config(from_=0, to=self.engine.num_cols - 1)
 	
@@ -485,7 +490,7 @@ class UltrasoundSignalViewer:
 	
 			self.update_loaded_label()
 	
-			#축 범위 한정(최초 1회만 바인딩)
+			#축 범위 한정(최초 1회만 바인딩) : 1. Whole A-Scan X축 설정
 			self.ax_whole.set_xlim(0, self.engine.num_samples)
 			self.line_whole_sig.set_xdata(self.engine.shared_sample_indices)
 			self.line_whole_env.set_xdata(self.engine.shared_sample_indices)
@@ -494,13 +499,20 @@ class UltrasoundSignalViewer:
 			#FFT 그래프 : xlimt 동적 계산 (Center F의 1/3~2배)
 			self.ax_fft.set_xlim(self.config.filter_lowcut_MHz,self.config.filter_highcut_MHz)
 			self.line_fft.set_xdata(self.engine.shared_fft_freqs_MHz)
-	
+
+			## 3. ROI X축 설정 (Signal과 Envelope '둘 다' 설정해야 함)
 			roi_x  = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
 			self.ax_roi.set_xlim(-self.config.align_pre_samples, self.config.align_post_samples)
 			self.line_roi_sig_for_A.set_xdata(roi_x)
+			self.line_roi_env.set_xdata(roi_x)		
 	
-			self.render_bscan()
+
+			## 4. [순서 중요] Y축 데이터(Signal/Envelope)를 600개로 먼저 채우기
 			self.update_ui()
+
+			# 5. Y축 데이터 세팅이 완료된 후 B-Scan 및 캔버스 렌더링 수행
+			self.render_bscan()
+
 	
 	def update_loaded_label(self) : 
 		if not self.engine.file_paths : 
@@ -560,7 +572,8 @@ class UltrasoundSignalViewer:
 			self.line_bscan_cursor.set_visible(True)
 	
 			#4. 전체 화면 갱신 후, 초록색 커서 이동용 '배경 비트맵' 최신화
-			self.canvas.draw()
+			self.canvas.draw() # B-Scan 영역만 그리는 것이 아니라, Figure 전체(왼쪽 ROI, Whole, FFT 그래프 포함)를 한꺼번에 스캔
+
 			#Blitting 기법용 배경 비트맵 캡쳐
 			self.bscan_background = self. canvas.copy_from_bbox(self.ax_bscan.bbox)
 	
@@ -595,6 +608,8 @@ class UltrasoundSignalViewer:
 	def update_ui(self) :  #전체 plot들 업데이트
 	
 		"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체)"""
+
+
 		if self.engine.raw_cube is None : 
 			print(f"UI 업데이트 실패 : raw cube가 없음")
 			return
@@ -614,7 +629,7 @@ class UltrasoundSignalViewer:
 		self.line_whole_sig.set_ydata(sig)
 		self.line_whole_env.set_ydata(env)
 	
-		## Blitting으로 초록색 세로 커서 라인 빠른 업데이트
+		## Blitting으로 초록색 세로 커서 라인 빠른 업데이트 : Align 및 Phase Inverse 마커 위치 업데이트
 		active_map = self.engine.get_current_align_map()
 		align_idx = active_map[r,c]
 		self.line_align_mark.set_xdata([align_idx,align_idx])
@@ -628,6 +643,7 @@ class UltrasoundSignalViewer:
 		else : 
 			self.line_inv_mark.set_visible(False)
 			self.ax_roi.set_title(f"ROI Align : {align_idx}", fontsize=9, fontweight='bold')
+
 			
 		#2. FFT Spectrum : 사전 계산된 배열 슬라이싱 사용
 		self.line_fft.set_ydata(fft_mag)
@@ -639,21 +655,24 @@ class UltrasoundSignalViewer:
 		max_mag = np.max(fft_mag)
 		self.ax_fft.set_ylim(0, max_mag * 1.1 if max_mag > 0 else 1)
 	
-		#3. ROI Signal(Y축만 교체)		
-		roi_sig_data = self.engine.roi_cube_float_for_A[r,c]
-		self.line_roi_sig_for_A.set_ydata(roi_sig_data)
-		roi_env_data =self.engine.roi_env_cube_float_for_A[r,c]
-		self.line_roi_env.set_ydata(roi_env_data)
-	
-		#4. B Scan Cursor UPdate : Blitting 기법
+		#3. ROI Signal(Y축만 교체)
+		if self.engine.roi_cube_float_for_A is not None : 	
+			self.line_roi_sig_for_A.set_ydata(self.engine.roi_cube_float_for_A[r,c])
+			self.line_roi_env.set_ydata(self.engine.roi_env_cube_float_for_A[r,c])
+				
+		
+		#4. B Scan Cursor UPdate : Blitting 기법 : B-Scan Cursor 위치 갱신
 		self.line_bscan_cursor.set_xdata([c,c])
 	
-		if self.bscan_background is not None:
-			self.canvas.restore_region(self.bscan_background)
-			self.ax_bscan.draw_artist(self.line_bscan_cursor)
-			self.canvas.blit(self.ax_bscan.bbox)
-		else:
-			self.canvas.draw_idle()
+		# if self.bscan_background is not None:
+		# 	self.canvas.restore_region(self.bscan_background)
+		# 	self.ax_bscan.draw_artist(self.line_bscan_cursor)
+		# 	self.canvas.blit(self.ax_bscan.bbox)
+		# else:
+		# 	self.canvas.draw_idle()
+
+		# [핵심] 블러팅 방해를 없애고 전체 Canvas를 유기적으로 재렌더링!
+		self.canvas.draw_idle()
 	
 	def on_bscan_hover(self,event) : 
 		#ctrl + 마우스 이동 시 쓰트롤링 업데이트
