@@ -249,7 +249,7 @@ class UltrasoundCubeEngine :
 
 
 		#step5 선택된 Align method 기반 ROI 3D 큐브 추출 & TGC & Log Compression
-		self.update_roi_cube()
+		self.update_roi_cube_A_B()
 
 
 	def compute_align_maps(self) -> None:
@@ -303,7 +303,7 @@ class UltrasoundCubeEngine :
 			return self.align_map_cross_corr
 		return self.align_map_envelope_peak
 
-	def update_roi_cube(self) :
+	def update_roi_cube_A_B(self) :
 		pre = self.config.align_pre_samples
 		post = self.config.align_post_samples
 		roi_len = pre + post
@@ -363,8 +363,8 @@ class UltrasoundSignalViewer:
 		#step6 :  최적화 & Phase Inverse 변수 정의
 		self.bscan_img_display : Optional[matplotlib.AxesImage] = None # 화면 패널 레이어 AxesImage 객체
 		self.line_bscan_cursor : Optional[Line2D] = None 	# B-Scan 커서
-		self.bscan_background = None						# Blitting  기법용 캡처 버퍼
-		self.last_ascan_update_time = 0.0					# 쓰트롤링 타임 스탬프
+		#self.bscan_background = None						# Blitting  기법용 캡처 버퍼
+		self.last_ascan_update_time = 0.0					# 쓰트롤링 타임 스탬프 : 현재 이것만 사용
 
 		self.phase_inverse_var =tk.StringVar(value='no_apply') 	#Phase Inverse 토글 기본값
 		self.bscan_2d_gray : Optional[np.ndarray] = None 		# 1채널 흑백 버퍼 캐시
@@ -526,12 +526,12 @@ class UltrasoundSignalViewer:
 			self.line_roi_sig_for_A.set_xdata(roi_x)
 			self.line_roi_env.set_xdata(roi_x)		
 	
-
+			# 5. Y축 데이터 세팅이 완료된 후 B-Scan 및 캔버스 렌더링 수행
+			self.render_bscan()
+			
 			## 4. [순서 중요] Y축 데이터(Signal/Envelope)를 600개로 먼저 채우기
 			self.update_ui()
 
-			# 5. Y축 데이터 세팅이 완료된 후 B-Scan 및 캔버스 렌더링 수행
-			self.render_bscan()
 
 	
 	def update_loaded_label(self) : 
@@ -543,14 +543,18 @@ class UltrasoundSignalViewer:
 	def render_bscan(self) : 
 	
 		#1. B Scan 1채널 흑백 버퍼 캐싱 및 Phaser Inverse RGB 오버레이
-		if self.engine.roi_cube_8bit_for_B is None : 
+		
+		if self.engine.roi_cube_8bit_for_B is None :
+			raise ValueError("큐브 생성 파이프라인을 실행한 적이 없습니다") 
 			return
+		
 		self.bscan_2d_gray = self.engine.roi_cube_8bit_for_B[self.current_row_idx].T #전치
 		h, w = self.bscan_2d_gray.shape
 	
 		pre = self.config.align_pre_samples
 		post = self.config.align_post_samples
 		extent = [0, w-1, post, -pre]
+
 	
 		#2. Phase Inverser 토글 조건 분기 (메모리 재할당 최소화)
 	
@@ -588,19 +592,20 @@ class UltrasoundSignalViewer:
 				cmap = 'gray' if display_data.ndim == 2 else None,
 				aspect = 'auto', origin = 'upper', extent = extent
 			)
-	
 			self.line_bscan_cursor.set_visible(True)
+		
 	
-			#4. 전체 화면 갱신 후, 초록색 커서 이동용 '배경 비트맵' 최신화
-			self.canvas.draw() # B-Scan 영역만 그리는 것이 아니라, Figure 전체(왼쪽 ROI, Whole, FFT 그래프 포함)를 한꺼번에 스캔
+		#4. 전체 화면 갱신 후, 초록색 커서 이동용 '배경 비트맵' 최신화
+		#self.canvas.draw() # B-Scan 영역만 그리는 것이 아니라, Figure 전체(왼쪽 ROI, Whole, FFT 그래프 포함)를 한꺼번에 스캔
 
-			#Blitting 기법용 배경 비트맵 캡쳐
-			self.bscan_background = self. canvas.copy_from_bbox(self.ax_bscan.bbox)
+		#Blitting 기법용 배경 비트맵 캡쳐
+		#self.bscan_background = self. canvas.copy_from_bbox(self.ax_bscan.bbox)
+	
 	
 	def on_row_change(self) : 
 		#ROW 변경시 : B-San 전체 재 랜더링 + A-Scan 업데이트
 		try:
-			self.current_row_idx = int(self.spin_row.get())
+			self.current_row_idx = int(self.spin_row.get()) #UI-> 엔진
 			self.update_loaded_label()
 			self.render_bscan()
 			self.update_ui()
@@ -611,13 +616,13 @@ class UltrasoundSignalViewer:
 		#col 변경시 : 커서 및 a-scan 그래프만 경량 업데이트
 		try : 
 			self.current_col_idx = int(self.spin_col.get())
-			self.update_ui()
+			self.update_ui() #에 의해서, b scan 위치 커서 또한 자동 업데이트됨
 		except ValueError:
 			pass
 	
 	def on_align_change(self) : 
-		self.config.align_method = self.align_method_var.get()
-		self.engine.update_roi_cube()
+		self.config.align_method = self.align_method_var.get() #ui 정보-> config에 입력
+		self.engine.update_roi_cube_A_B()
 		self.render_bscan()
 		self.update_ui()
 	
@@ -627,7 +632,7 @@ class UltrasoundSignalViewer:
 	
 	def update_ui(self) :  #전체 plot들 업데이트
 	
-		"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체)"""
+		"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체) + 전체 Draw"""
 
 
 		if self.engine.raw_cube is None : 
@@ -649,7 +654,7 @@ class UltrasoundSignalViewer:
 		self.line_whole_sig.set_ydata(sig)
 		self.line_whole_env.set_ydata(env)
 	
-		## Blitting으로 초록색 세로 커서 라인 빠른 업데이트 : Align 및 Phase Inverse 마커 위치 업데이트
+		## 표시 라인 빠른 업데이트 : Align 및 Phase Inverse 마커 위치 업데이트
 		active_map = self.engine.get_current_align_map()
 		align_idx = active_map[r,c]
 		self.line_align_mark.set_xdata([align_idx,align_idx])
@@ -681,32 +686,29 @@ class UltrasoundSignalViewer:
 			self.line_roi_env.set_ydata(self.engine.roi_env_cube_float_for_A[r,c])
 				
 		
-		#4. B Scan Cursor UPdate : Blitting 기법 : B-Scan Cursor 위치 갱신
+		#B-Scan Cursor 위치 갱신 : c에 의해, 실시간 바뀜
 		self.line_bscan_cursor.set_xdata([c,c])
-	
-		# if self.bscan_background is not None:
-		# 	self.canvas.restore_region(self.bscan_background)
-		# 	self.ax_bscan.draw_artist(self.line_bscan_cursor)
-		# 	self.canvas.blit(self.ax_bscan.bbox)
-		# else:
-		# 	self.canvas.draw_idle()
-
-		# [핵심] 블러팅 방해를 없애고 전체 Canvas를 유기적으로 재렌더링!
 		self.canvas.draw_idle()
 	
 	def on_bscan_hover(self,event) : 
 		#ctrl + 마우스 이동 시 쓰트롤링 업데이트
 		if event.inaxes == self.ax_bscan and event.key == 'control' :
 			if event.xdata is not None :
-				col = int(round(event.xdata))
-				if 0 <= col < self.engine.num_cols :
+
+				_col = int(round(event.xdata))
+
+				if 0 <= _col < self.engine.num_cols :
+
 					current_time = time.time()
+
 					if current_time - self.last_ascan_update_time > 0.1 :
+
 						self.last_ascan_update_time = current_time
-						self.current_col_idx = col
+						self.current_col_idx = _col
 						self.spin_col.delete(0, tk.END)
-						self.spin_col.insert(0, str(col))
+						self.spin_col.insert(0, str(_col)) #스핀박스도 바뀜. 그러나, on_col_change()이벤트는 미발생
 						self.update_ui()
+
 	def run(self) :
 		self.window.mainloop()
 	
