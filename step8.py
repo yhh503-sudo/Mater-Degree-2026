@@ -163,15 +163,21 @@ class UltrasoundProcessorEngine:
 		if self.data.raw_cube is None:
 			raise ValueError("Raw cube가 할당되지 않았습니다.")
 
+		#1. 밴드패스 필터
 		self.data.filtered_cube = self.apply_bandpass_filter(self.data.raw_cube)
+		
+		#2. 필터 거친 후 -> 엔벨롭
 		self.data.env_cube = self.extract_envelope(self.data.filtered_cube)
 
-		#self.compute_fft_cube()
+		#3. self.compute_fft_cube()
 		self.data.raw_fft_mag_cube = self.compute_fft_cube(self.data.raw_cube, data_samples = self.data.num_samples)
 		self.data.filtered_fft_mag_cube = self.compute_fft_cube(self.data.filtered_cube, data_samples = self.data.num_samples)
 		
+		#4. Align 인덱스들 계산 & Inverse 계산
 		self.compute_align_maps()
-		self.update_active_align_map_pointer()  # 포인터 최우선 갱신
+
+		#5. roi cube : a, b 스캔 만듦
+		#self.update_active_align_map_pointer()  # 포인터 최우선 갱신
 		self.update_roi_cube_A_B()
 
 
@@ -183,7 +189,7 @@ class UltrasoundProcessorEngine:
 			self.data.active_align_map = self.data.align_map_envelope_peak
 
 
-	def apply_bandpass_filter(self, signal : np.ndarray) -> np.ndarray :
+	def apply_bandpass_filter(self, signal : np.ndarray, axis_in : int = -1) -> np.ndarray :
 		nyquist: float = 0.5 * self.data.config.sampling_rate
 		low: float = max(0.001, min((self.data.config.filter_lowcut_MHz * 1e6) / nyquist, 0.98))
 		high: float = max(0.002, min((self.data.config.filter_highcut_MHz * 1e6) / nyquist, 0.99))
@@ -192,7 +198,7 @@ class UltrasoundProcessorEngine:
 			high = min(low + 0.01, 0.99)
 
 		b, a = butter(self.data.config.filter_order, [low, high], btype='band')
-		return filtfilt(b, a, signal, axis=-1).astype(np.float32)
+		return filtfilt(b, a, signal, axis = axis_in).astype(np.float32)
 	
 	def extract_envelope(self, signal_array : np.ndarray, axis_in : int = -1) -> np.ndarray :
 			return np.abs(hilbert(signal_array, axis=axis_in)).astype(np.float32)
@@ -309,9 +315,10 @@ class UltrasoundProcessorEngine:
 				t_start = s_start - r_start  # 0 이상이며, pre 값을 초과하지 않음
 				t_end = t_start + (s_end - s_start)  # 항상 양수이며, roi_len(pre+post) 이하
 
-				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)
+				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)				
 				if s_start < s_end:
 					roi_signal_cube[r, c, t_start:t_end] = self.data.filtered_cube[r, c, s_start:s_end]
+
 				else:
 					pass# zero padding
 
@@ -322,7 +329,7 @@ class UltrasoundProcessorEngine:
 		self.data.roi_env_cube_float_for_A = self.extract_envelope(self.data.roi_cube_float_for_A)
 
 		# 3. B-Scan용 8-bit Log CUBE 생성
-		self.data.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_cube_float_for_A)
+		self.data.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_env_cube_float_for_A)
 
 # ==========================================
 # 3. GUI Processor (Tkinter Interface)
