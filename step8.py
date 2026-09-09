@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 from matplotlib.gridspec import GridSpec
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 import math
 import os
@@ -14,7 +14,6 @@ from matplotlib.figure import Figure
 from matplotlib. lines import Line2D
 import ctypes
 import time
-
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
 
@@ -69,8 +68,9 @@ class ExperimentConfig :
 
 # 2. 순수 데이터 컨테이너 (slots = True 메모리 최적화)
 
-#dataclass(slots = True)
+@dataclass(slots = True) #자동 __init__ 됨
 class UltrasoundCubeData : 
+
 	config : ExperimentConfig
 	file_paths : List [str] = field(default_factory=list)
 
@@ -167,13 +167,13 @@ class UltrasoundProcessorEngine:
 		self.data.env_cube = self.extract_envelope(self.data.filtered_cube)
 
 		#self.compute_fft_cube()
-		self.data.raw_fft_mag_cube = self.compute_fft_cube(self.data.raw_cube)
-		self.data.filtered_fft_mag_cube = self.compute_fft_cube(self.data.filtered_cube)
+		self.data.raw_fft_mag_cube = self.compute_fft_cube(self.data.raw_cube, data_samples = self.data.num_samples)
+		self.data.filtered_fft_mag_cube = self.compute_fft_cube(self.data.filtered_cube, data_samples = self.data.num_samples)
 		
-
 		self.compute_align_maps()
 		self.update_active_align_map_pointer()  # 포인터 최우선 갱신
 		self.update_roi_cube_A_B()
+
 
 	def update_active_align_map_pointer(self) -> None :
 		# Active map  포인터 갱신
@@ -182,7 +182,7 @@ class UltrasoundProcessorEngine:
 		else :
 			self.data.active_align_map = self.data.align_map_envelope_peak
 
-	#@staticmethod
+
 	def apply_bandpass_filter(self, signal : np.ndarray) -> np.ndarray :
 		nyquist: float = 0.5 * self.data.config.sampling_rate
 		low: float = max(0.001, min((self.data.config.filter_lowcut_MHz * 1e6) / nyquist, 0.98))
@@ -193,20 +193,12 @@ class UltrasoundProcessorEngine:
 
 		b, a = butter(self.data.config.filter_order, [low, high], btype='band')
 		return filtfilt(b, a, signal, axis=-1).astype(np.float32)
-
-
-	#@staticmethod
-	def extract_envelope(signal_array : np.ndarray, axis_in : int = -1) -> np.ndarray :
-		#:param signal_array: 입력 신호 배열 (np.ndarray)
-        #:param axis: Hilbelt 변환을 수행할 축 (기본값: 마지막 축 -1)
-        #:return: float32 타입의 Envelope 배열
-
-		return np.abs(hilbert(signal_array, axis=axis_in)).astype(np.float32)
-
-	#@staticmethod
-	def compute_fft_cube(signal_array : np.ndarray, axis_in : int = -1) -> np.ndarray :
-		return np.abs(np.fft.rfft(signal_array, axis=-axis_in) / self.data.num_samples).astype(np.float32)
-
+	
+	def extract_envelope(self, signal_array : np.ndarray, axis_in : int = -1) -> np.ndarray :
+			return np.abs(hilbert(signal_array, axis=axis_in)).astype(np.float32)
+	
+	def compute_fft_cube(self, signal_array : np.ndarray, data_samples : int, axis_in : int = -1) -> np.ndarray :
+		return np.abs(np.fft.rfft(signal_array, axis = axis_in) / data_samples).astype(np.float32)
 
 	def compute_align_maps(self) -> None:
 		#1. Envelope Peak 방식 : Envelope의 Max Index  추출
@@ -216,7 +208,7 @@ class UltrasoundProcessorEngine:
 		self.data.align_map_cross_corr = np.zeros((self.data.num_rows,self.data.num_cols),dtype=int)
 		self.data.phase_inv_map = np.full((self.data.num_rows,self.data.num_cols),-1,dtype=int)
 
-		if self.ref_template is not None:
+		if self.data.ref_template is not None:
 			inv_start = self.data.config.phase_inv_search_start_offset_from_align
 			inv_end = self.data.config.phase_inv_search_end_offset_from_align
 
@@ -274,7 +266,7 @@ class UltrasoundProcessorEngine:
 	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
 
 		#Config Dynamic Range 파라미터를 적용한 8-bit Log Compression"""
-		data_safe = np.maximum(self.data.roi_env_cube_float_for_A, 0.0)
+		data_safe = np.maximum(roi_signal_cube, 0.0)
 
 		alpha = self.data.config.log_cmp_alpha
 		dr_dB = self.data.config.log_cmp_dynamic_range_dB
@@ -297,6 +289,7 @@ class UltrasoundProcessorEngine:
 		roi_len : int = pre + post
 
 		roi_signal_cube : np.ndarray = np.zeros((self.data.num_rows, self.data.num_cols, roi_len), dtype = np.float32)
+		self.update_active_align_map_pointer()
 		active_align_map : Optional[np.ndarray] = self.data.active_align_map
 
 		#2D Align Map 좌표 기준으로 Boundary-safe ROI 슬라이싱
@@ -318,7 +311,7 @@ class UltrasoundProcessorEngine:
 
 				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)
 				if s_start < s_end:
-					roi_signal_cube[r, c, t_start:t_end] = self.filtered_cube[r, c, s_start:s_end]
+					roi_signal_cube[r, c, t_start:t_end] = self.data.filtered_cube[r, c, s_start:s_end]
 				else:
 					pass# zero padding
 
@@ -331,286 +324,6 @@ class UltrasoundProcessorEngine:
 		# 3. B-Scan용 8-bit Log CUBE 생성
 		self.data.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_cube_float_for_A)
 
-
-# ==========================================
-# 2. 3D Cube Data Engine (2D Align ndarray 기반)
-# ==========================================
-'''
-class UltrasoundCubeEngine : 
-	def __init__(self, config: ExperimentConfig) -> None:
-
-
-		self.config = config
-		self.file_paths : List[str] = []
-
-		# 3D CUBE Dimensions
-		self.num_rows :int =0
-		self.num_cols : int = 0
-		self.num_samples : int = 0
-
-		#3D Cubes "cube는 3D"
-		self.raw_cube : Optional[np.ndarray] = None
-		self.filtered_cube : Optional[np.ndarray] = None# float32
-		self.env_cube : Optional[np.ndarray] = None		# float32
-		self.roi_cube_8bit_for_B : Optional[np.ndarray] = None #B-Scan : 이건 실시간 추출
-		self.roi_cube_float_for_A : Optional[np.ndarray] = None # ROI Float32 CUBE 추가
-		self.roi_env_cube_float_for_A : Optional[np.ndarray] = None 
-
-
-		# 2D Align Maps (Rows, Cols): envelope_peak, cross_corr 2개만 관리
-		self.align_map_envelope_peak : Optional[np.ndarray] = None
-		self.align_map_cross_corr : Optional[np.ndarray] = None
-
-		#2D Phase Inverse Map (Rows, Cols)
-		self.phase_inv_map : Optional[np.ndarray] = None
-
-		#3D FFT Magnitude Cubes (미리 선언)
-		self.raw_fft_mag_cube : Optional[np.ndarray] = None
-		self.filtered_fft_mag_cube : Optional[np.ndarray] = None #float32
-
-		#Shared Axes & Ref Signal
-		self.shared_fft_freqs_MHz : Optional[np.ndarray] = None
-		self.shared_sample_indices : Optional[np.ndarray] = None
-		self.ref_template : Optional[np.ndarray] = None
-		self.file_paths : List[str] = []
-
-	def load_files_to_cube(self, file_paths : List[str]) -> bool :
-
-		if not file_paths :
-			return False
-
-		try :
-			
-			#CUBE 차원 정보 설정 및 클래스 멤버 변수 저장
-
-			self.file_paths = file_paths
-			self.num_rows = len(file_paths)
-			df_first = pd.read_csv(file_paths[0], header=None)
-			self.num_cols = len (df_first)
-			self.num_samples = len(df_first.iloc[0].dropna().values)
-			
-			#3D Cube 메모리 할당 (np.int16으로 메모리 50% 절감)
-			self.raw_cube = np.zeros((self.num_rows,self.num_cols,self.num_samples), dtype = np.int16)
-
-			for row_idx, fpath in enumerate(file_paths) : 
-				# ✅ 과도한 슬라이싱 방어 코드 및 이중 for문 제거 -> 한꺼번에 Vectorized 2D 할당
-				df = pd.read_csv(fpath, header = None).dropna(axis=1, how='all')
-				self.raw_cube[row_idx] = df.values.astype(np.int16)
-
-
-			#x축들 생성 : 일반 인덱스 및 주파수 축 생성
-			self.shared_sample_indices = np.arange(self.num_samples, dtype=int)
-			time_dist = 1.0 / self.config.sampling_rate
-			freq_hz = np.fft.rfftfreq(self.num_samples, d = time_dist)
-			self.shared_fft_freqs_MHz = freq_hz/ 1e6
-			
-			#Ref 템플릿 로드
-			self._load_ref_template()
-			
-			#전체 3D 큐브 파이프라인 연산
-			self.process_cube_pipeline()
-			return True
-
-		except Exception as e:
-			print(f"csv파일들->cube 과정에서 문제가 발생 : {e}")
-			return False
-
-	def _load_ref_template(self) : 
-		path = self.config.ref_template_csv_path
-		if os.path.exists(path):
-			try:
-				df = pd.read_csv(path, header=None, nrows = 1)
-				self.ref_template = df.iloc[0].dropna().values.astype(np.float32)
-			except Exception as e:
-				print(f"Ref template load  과정에서 문제 발생 : {e}")
-				self.ref_template = None
-
-	def apply_bandpass_filter(self) -> np.ndarray:
-		#Raw CUBE (int16)에 Butter 필터 적용 후, float32로 반환
-		if self.raw_cube is None :
-			raise ValueError("raw cube 가 로드되지 않았습니다")
-		nyquist = 0.5 *self.config.sampling_rate
-		low = max(0.001, min((self.config.filter_lowcut_MHz * 1e6) / nyquist, 0.98))
-		high = max(0.002, min((self.config.filter_highcut_MHz * 1e6) / nyquist, 0.99))
-
-		if low >= high : 
-			high = min(low + 0.01, 0.99)		
-
-		b,a = butter(self.config.filter_order, [low, high], btype='band')
-		_filtered_cube = filtfilt(b, a, self.raw_cube, axis=-1).astype(np.float32)
-		return _filtered_cube
-
-
-	def extract_envelope(self, input_cube : np.ndarray) -> np.ndarray : 
-		#필터링된 CUBE 신호로부터, 힐베르트 엔벨롭 추출
-		if input_cube is None:
-			raise ValueError("엔벨롭 대상 큐브가 없는 오류 입니다")
-		_evn = np.abs(hilbert(input_cube,axis=-1)).astype(np.float32)
-		return _evn
-	
-
-	def apply_tgc(self, roi_signal_cube : np.ndarray) -> np.ndarray : 
-
-		#ROI Signl CUBE에 Depth TGC 적용
-		if not self.config.tgc_enable : 
-			return roi_signal_cube
-
-		roi_len = roi_signal_cube.shape[-1]
-		indices = np.arange(roi_len)
-		depth_offset = np.maximum(0, indices - self.config.tgc_start_sample_from_align)
-		gain_dB = depth_offset * self.config.tgc_slope_dB
-		tgc_gain = (10.0 ** (gain_dB / 20.0)).astype(np.float32)
-
-		# In-place 곱셈 연산으로 메모리 효율 유지
-		roi_signal_cube *= tgc_gain
-		return roi_signal_cube
-
-	def compute_fft_cubes(self) -> None:
-		#"""Raw 및 Filtered 3D Cube 전체에 대해 FFT Magnitudes를 사전 계산하여 저장"""
-		if self.raw_cube is None or self.filtered_cube is None:
-			raise ValueError("FFT 계산 실패: Raw 또는 Filtered CUBE가 준비되지 않았습니다.")
-
-		# Numpy Vectorized FFT (마지막 축인 Sample 축에 대해 실수 FFT 수행)
-		# np.abs()를 미리 적용.복소수 스펙트럼 대신 크기(Magnitude) 3D 배열로 저장
-		self.raw_fft_mag_cube = np.abs(np.fft.rfft(self.raw_cube, axis=-1)/ self.num_samples).astype(np.float32)
-		self.filtered_fft_mag_cube = np.abs(np.fft.rfft(self.filtered_cube, axis=-1)/ self.num_samples).astype(np.float32)
-
-
-	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
-		#"""Config Dynamic Range 파라미터를 적용한 Envelope 및 8-bit Log Compression"""
-		self.roi_env_cube_float_for_A = np.abs(hilbert(roi_signal_cube, axis = -1))
-		data_safe = np.maximum(self.roi_env_cube_float_for_A, 0.0)
-
-		alpha = self.config.log_cmp_alpha
-		dr_dB = self.config.log_cmp_dynamic_range_dB
-
-		data_log = 20.0 * np.log10(1.0 + alpha * data_safe)
-
-		max_val = np.max(data_log)
-		min_cutoff = max_val - dr_dB
-		data_log = np.clip(data_log, min_cutoff, max_val)
- 
-		norm_data = (data_log - min_cutoff) / dr_dB
-		_data_8bit =(norm_data * 255.0).astype(np.uint8)
-		return _data_8bit
-	
-	
-
-	def process_cube_pipeline(self) :
-		#3D 큐브 전체 연산 파이프라이
-		if self.raw_cube is None :
-			raise ValueError("파이프라인 실패. raw cube 가 로드되지 않았습니다")
-
-		#step1 BAND PASS
-		self.filtered_cube = self.apply_bandpass_filter()
-
-		#step2 Envelope Extracet
-		self.env_cube = self.extract_envelope(self.filtered_cube)
-
-		#step3 FFT 3D CUBE 사전 연산 
-		self.compute_fft_cubes()
-
-
-		#step4 2D Aligh Index Map 2개 구성 (envelope peak & cross corr)
-		self.compute_align_maps()
-
-
-		#step5 선택된 Align method 기반 ROI 3D 큐브 추출 & TGC & Log Compression
-		self.update_roi_cube_A_B()
-
-
-	def compute_align_maps(self) -> None:
-		#1. Envelope Peak 방식 : Envelope의 Max Index  추출
-		self.align_map_envelope_peak = np.argmax(self.env_cube, axis=-1).astype(int)
-
-		#2. Cross Correlation 방식 : Ref 필수
-		self.align_map_cross_corr = np.zeros((self.num_rows,self.num_cols),dtype=int)
-		self.phase_inv_map = np.full((self.num_rows,self.num_cols),-1,dtype=int)
-
-		if self.ref_template is not None:
-			inv_start = self.config.phase_inv_search_start_offset_from_align
-			inv_end = self.config.phase_inv_search_end_offset_from_align
-
-			th_neg = self.config.phase_inv_neg_threshold
-			th_roi_ratio = self.config.phase_inv_roi_ratio
-			th_pos_ratio = self.config.phase_inv_whole_pos_ratio 
-
-			for r in range(self.num_rows):
-				for c in range(self.num_cols):
-					whole_sig = self.filtered_cube[r, c]
-					corr = np.correlate(whole_sig, self.ref_template, mode='same')
-					pos_idx = int(np.argmax(corr))
-					self.align_map_cross_corr[r, c] = pos_idx
-
-					# Phase Inversion 검출 (len(sig) 기준 경계)
-					s_idx = pos_idx + inv_start
-					e_idx = min(pos_idx + inv_end, len(whole_sig))
-
-					if s_idx < e_idx: #정상 검색 범위임
-						roi_corr = corr[s_idx:e_idx]
-						min_rel_idx = np.argmin(roi_corr) #argmin 인덱스
-						neg_val = roi_corr[min_rel_idx]
-						pos_val_in_whole_sig = corr[pos_idx]
-						max_val_roi = np.max(roi_corr) #max 값 자체
-
-						#Config 임계값 기반 판정
-						cond1 = neg_val < th_neg
-						cond2 = abs(neg_val) > (max_val_roi * th_roi_ratio)
-						cond3 = abs(neg_val) > (pos_val_in_whole_sig * th_pos_ratio)
-
-						if cond1 and cond2 and cond3 : 
-						#if (neg_val < -0.4) and (abs(neg_val) > max_val_roi * 1.0) and (abs(neg_val) > pos_val_in_whole_sig * 0.15):
-							self.phase_inv_map[r,c] = s_idx + min_rel_idx
-		else:
-			self.align_map_cross_corr = self.align_map_envelope_peak.copy()
-
-	def get_current_align_map(self) -> np.ndarray:
-		"""현재 선택된 Align 방식에 따른 2D Align Index Map 반환"""
-		if self.config.align_method == 'cross_corr' :
-			return self.align_map_cross_corr
-		return self.align_map_envelope_peak
-
-	def update_roi_cube_A_B(self) :
-
-		pre = self.config.align_pre_samples
-		post = self.config.align_post_samples
-		roi_len = pre + post
-
-		roi_signal_cube = np.zeros((self.num_rows, self.num_cols, roi_len), dtype = np.float32)
-		active_align_map = self.get_current_align_map()
-
-		#2D Align Map 좌표 기준으로 Boundary-safe ROI 슬라이싱
-		for r in range(self.num_rows):
-			for c in range(self.num_cols):
-				a_idx = active_align_map[r, c]
-
-				# CUBE 원본에서의 시작/끝 범위
-				r_start = a_idx - pre
-				r_end = a_idx + post
-
-				# 실제 CUBE 원본 데이터 경계(Boundary) 제한
-				s_start = max(0, r_start)
-				s_end = min(self.num_samples, r_end)
-
-				# roi_signal_cube 내부에 복사될 위치 (Offset 계산)
-				t_start = s_start - r_start  # 0 이상이며, pre 값을 초과하지 않음
-				t_end = t_start + (s_end - s_start)  # 항상 양수이며, roi_len(pre+post) 이하
-
-				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)
-				if s_start < s_end:
-					roi_signal_cube[r, c, t_start:t_end] = self.filtered_cube[r, c, s_start:s_end]
-				else:
-					pass# zero padding
-
-		# 2. TGC 적용 후 Float CUBE 저장				
-		self.roi_cube_float_for_A = self.apply_tgc(roi_signal_cube) #self.roi_cube_float_for_A는 TGC가 기본 적용임
-
-		#self.roi_env_cube_float_for_A = np.abs(hilbert(self.roi_cube_float_for_A))
-
-		# 3. B-Scan용 8-bit Log CUBE 생성
-		self.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.roi_cube_float_for_A)
-
-'''
 # ==========================================
 # 3. GUI Processor (Tkinter Interface)
 # ==========================================
@@ -618,11 +331,12 @@ class UltrasoundCubeEngine :
 class UltrasoundSignalViewer:
 	def __init__(self) : 
 		self.window = tk.Tk()
-		self.window.title("Ultrasound Signal Processor : B Scan Rows Analyzer")
-		self.window.geometry("1280x700")
+		self.window.title("Ultrasound Signal Processor : Pure Functions")
+		self.window.geometry("1280x800")
 
-		self.config = ExperimentConfig()
-		self.engine = UltrasoundCubeEngine(self.config)
+		self.config : ExperimentConfig= ExperimentConfig()
+		self.data : UltrasoundCubeData = UltrasoundCubeData(config=self.config)
+		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data)
 
 		self.current_row_idx = 0
 		self.current_col_idx = 0
@@ -632,7 +346,6 @@ class UltrasoundSignalViewer:
 		#step6 :  최적화 & Phase Inverse 변수 정의
 		self.bscan_img_display : Optional[matplotlib.AxesImage] = None # 화면 패널 레이어 AxesImage 객체
 		self.line_bscan_cursor : Optional[Line2D] = None 	# B-Scan 커서
-		#self.bscan_background = None						# Blitting  기법용 캡처 버퍼
 		self.last_ascan_update_time = 0.0					# 쓰트롤링 타임 스탬프 : 현재 이것만 사용
 
 		self.phase_inverse_var =tk.StringVar(value='no_apply') 	#Phase Inverse 토글 기본값
@@ -768,8 +481,8 @@ class UltrasoundSignalViewer:
 	
 		if self.engine.load_files_to_cube(list(paths)):
 
-			self.spin_row.config(from_=0, to=self.engine.num_rows - 1)
-			self.spin_col.config(from_=0, to=self.engine.num_cols - 1)
+			self.spin_row.config(from_=0, to=self.data.num_rows - 1)
+			self.spin_col.config(from_=0, to=self.data.num_cols - 1)
 	
 			self.spin_row.delete(0,tk.END); self.spin_row.insert(0, "0")
 			self.spin_col.delete(0, tk.END); self.spin_col.insert(0, "0")
@@ -777,18 +490,18 @@ class UltrasoundSignalViewer:
 			self.current_row_idx = 0
 			self.current_col_idx = 0
 
-			self.lbl_shape_info.config(text=f'{self.engine.num_rows}Rows*{self.engine.num_cols}Cols')
+			self.lbl_shape_info.config(text=f'{self.data.num_rows}Rows*{self.data.num_cols}Cols')
 			self.update_loaded_label()
 	
 			#축 범위 한정(최초 1회만 바인딩) : 1. Whole A-Scan X축 설정
-			self.ax_whole.set_xlim(0, self.engine.num_samples)
-			self.line_whole_sig.set_xdata(self.engine.shared_sample_indices)
-			self.line_whole_env.set_xdata(self.engine.shared_sample_indices)
+			self.ax_whole.set_xlim(0, self.data.num_samples)
+			self.line_whole_sig.set_xdata(self.data.shared_sample_indices)
+			self.line_whole_env.set_xdata(self.data.shared_sample_indices)
 			self.ax_roi.set_xlim(-self.config.align_pre_samples, self.config.align_post_samples)
 	
 			#FFT 그래프 : xlimt 동적 계산 (Center F의 1/3~2배)
 			self.ax_fft.set_xlim(self.config.filter_lowcut_MHz,self.config.filter_highcut_MHz)
-			self.line_fft.set_xdata(self.engine.shared_fft_freqs_MHz)
+			self.line_fft.set_xdata(self.data.shared_fft_freqs_MHz)
 
 			## 3. ROI X축 설정 (Signal과 Envelope '둘 다' 설정해야 함)
 			roi_x  = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
@@ -805,20 +518,20 @@ class UltrasoundSignalViewer:
 
 	
 	def update_loaded_label(self) : 
-		if not self.engine.file_paths or self.current_row_idx >= len(self.engine.file_paths) : 
+		if not self.data.file_paths or self.current_row_idx >= len(self.data.file_paths) : 
 			return
-		filename = os.path.basename(self.engine.file_paths[self.current_row_idx])
+		filename = os.path.basename(self.data.file_paths[self.current_row_idx])
 		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
 	
 	def render_bscan(self) : 
 	
 		#1. B Scan 1채널 흑백 버퍼 캐싱 및 Phaser Inverse RGB 오버레이
 		
-		if self.engine.roi_cube_8bit_for_B is None :
+		if self.data.roi_cube_8bit_for_B is None :
 			raise ValueError("B스캔 버퍼 만들기 실패. 큐브 생성 파이프라인을 실행한 적이 없습니다") 
 			return
 		
-		self.bscan_2d_gray = self.engine.roi_cube_8bit_for_B[self.current_row_idx].T #전치
+		self.bscan_2d_gray = self.data.roi_cube_8bit_for_B[self.current_row_idx].T #전치
 		h, w = self.bscan_2d_gray.shape
 	
 		pre = self.config.align_pre_samples
@@ -827,17 +540,18 @@ class UltrasoundSignalViewer:
 
 		#2. Phase Inverser 토글 조건 분기 (메모리 재할당 최소화)
 		cond1 = self.phase_inverse_var.get() == "blue_apply"
-		cond2 = self.engine.phase_inv_map is not None
+		cond2 = self.data.phase_inv_map is not None
 		is_blue_apply = cond1 and cond2
 	
 		if is_blue_apply :
 			# RGB 3채널 배열 생성 (오버레이 적용 시에만 동적 할당)
 			display_data = np.stack([self.bscan_2d_gray] * 3, axis = -1)
-			active_align_map = self.engine.get_current_align_map()
+			self.engine.update_active_align_map_pointer()
+			active_align_map = self.data.active_align_map
 	
 			## Vectorized 또는 범위 검증 루프
 			for c in range(w) : 
-				inv_abs_idx = self.engine.phase_inv_map[self.current_row_idx,c]
+				inv_abs_idx = self.data.phase_inv_map[self.current_row_idx,c]
 				if inv_abs_idx != -1:
 					align_abs_idx = active_align_map[self.current_row_idx, c]
 					rel_idx = inv_abs_idx - align_abs_idx + pre #이래야 ROI(-100,500)에 맞음
@@ -896,30 +610,31 @@ class UltrasoundSignalViewer:
 		"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체) + 전체 Draw"""
 
 
-		if self.engine.raw_cube is None : 
+		if self.data.raw_cube is None : 
 			print(f"UI 업데이트 실패 : raw cube가 없음")
 			return
 		r,c = self.current_row_idx, self.current_col_idx
 		mode = self.view_mode_var.get()
 	
 		if mode == 'raw' : 
-			sig = self.engine.raw_cube[r,c]
-			env = self.engine.env_cube[r,c]
-			fft_mag = self.engine.raw_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
+			sig = self.data.raw_cube[r,c]
+			env = self.data.env_cube[r,c]
+			fft_mag = self.data.raw_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
 		else:
-			sig = self.engine.filtered_cube[r,c]
-			env = self.engine.env_cube[r,c]
-			fft_mag = self.engine.filtered_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
+			sig = self.data.filtered_cube[r,c]
+			env = self.data.env_cube[r,c]
+			fft_mag = self.data.filtered_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
 	
 		#1. Whole Ascan plot
 		self.line_whole_sig.set_ydata(sig)
 		self.line_whole_env.set_ydata(env)
 	
 		## 표시 라인 빠른 업데이트 : Align 및 Phase Inverse 마커 위치 업데이트
-		active_map = self.engine.get_current_align_map()
-		align_idx = active_map[r,c]
+		#active_map = self.engine.get_current_align_map()
+		self.engine.update_active_align_map_pointer()
+		align_idx : int = self.data.active_align_map[r,c]
 		self.line_align_mark.set_xdata([align_idx,align_idx])
-		inv_idx = self.engine.phase_inv_map[r,c]
+		inv_idx = self.data.phase_inv_map[r,c]
 	
 		if inv_idx != -1:
 			self.line_inv_mark.set_xdata([inv_idx,inv_idx])
@@ -934,7 +649,7 @@ class UltrasoundSignalViewer:
 		#2. FFT Spectrum : 사전 계산된 배열 슬라이싱 사용
 		self.line_fft.set_ydata(fft_mag)
 		peak_freq_idx = np.argmax(fft_mag)
-		peak_freq_MHz = self.engine.shared_fft_freqs_MHz[peak_freq_idx]
+		peak_freq_MHz = self.data.shared_fft_freqs_MHz[peak_freq_idx]
 		self.ax_fft.set_title(f"FFT: Peak={peak_freq_MHz:.1f}MHz", fontsize=9, fontweight='bold')
 		self.line_fft_peak.set_xdata([peak_freq_MHz, peak_freq_MHz])
 	
@@ -942,9 +657,9 @@ class UltrasoundSignalViewer:
 		self.ax_fft.set_ylim(0, max_mag * 1.1 if max_mag > 0 else 1)
 	
 		#3. ROI Signal(Y축만 교체)
-		if self.engine.roi_cube_float_for_A is not None : 	
-			self.line_roi_sig_for_A.set_ydata(self.engine.roi_cube_float_for_A[r,c])
-			self.line_roi_env.set_ydata(self.engine.roi_env_cube_float_for_A[r,c])
+		if self.data.roi_cube_float_for_A is not None : 	
+			self.line_roi_sig_for_A.set_ydata(self.data.roi_cube_float_for_A[r,c])
+			self.line_roi_env.set_ydata(self.data.roi_env_cube_float_for_A[r,c])
 				
 		
 		#B-Scan Cursor 위치 갱신 : c에 의해, 실시간 바뀜
@@ -960,7 +675,7 @@ class UltrasoundSignalViewer:
 
 				_col = int(round(event.xdata))
 
-				if 0 <= _col < self.engine.num_cols :
+				if 0 <= _col < self.data.num_cols :
 
 					current_time = time.time()
 
