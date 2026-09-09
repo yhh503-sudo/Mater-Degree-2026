@@ -162,9 +162,15 @@ class UltrasoundProcessorEngine:
 	def process_cube_pipeline(self) -> None :
 		if self.data.raw_cube is None:
 			raise ValueError("Raw cube가 할당되지 않았습니다.")
-		self.apply_bandpass_filter()
-		self.extract_envelope()
-		self.compute_fft_cubes()
+
+		self.data.filtered_cube = self.apply_bandpass_filter(self.data.raw_cube)
+		self.data.env_cube = self.extract_envelope(self.data.filtered_cube)
+
+		#self.compute_fft_cube()
+		self.data.raw_fft_mag_cube = self.compute_fft_cube(self.data.raw_cube)
+		self.data.filtered_fft_mag_cube = self.compute_fft_cube(self.data.filtered_cube)
+		
+
 		self.compute_align_maps()
 		self.update_active_align_map_pointer()  # 포인터 최우선 갱신
 		self.update_roi_cube_A_B()
@@ -176,7 +182,8 @@ class UltrasoundProcessorEngine:
 		else :
 			self.data.active_align_map = self.data.align_map_envelope_peak
 
-	def apply_bandpass_filter(self) -> None:
+	#@staticmethod
+	def apply_bandpass_filter(self, signal : np.ndarray) -> np.ndarray :
 		nyquist: float = 0.5 * self.data.config.sampling_rate
 		low: float = max(0.001, min((self.data.config.filter_lowcut_MHz * 1e6) / nyquist, 0.98))
 		high: float = max(0.002, min((self.data.config.filter_highcut_MHz * 1e6) / nyquist, 0.99))
@@ -185,20 +192,150 @@ class UltrasoundProcessorEngine:
 			high = min(low + 0.01, 0.99)
 
 		b, a = butter(self.data.config.filter_order, [low, high], btype='band')
-		self.data.filtered_cube = filtfilt(b, a, self.data.raw_cube, axis=-1).astype(np.float32)
+		return filtfilt(b, a, signal, axis=-1).astype(np.float32)
 
 
-	def extract_envelope(self) -> None : 
-		if self.data.filtered_cube is None:
-			return
-		self.data.env_cube = np.abs(hilbert(self.data.filtered_cube, axis=-1)).astype(np.float32)
+	#@staticmethod
+	def extract_envelope(signal_array : np.ndarray, axis_in : int = -1) -> np.ndarray :
+		#:param signal_array: 입력 신호 배열 (np.ndarray)
+        #:param axis: Hilbelt 변환을 수행할 축 (기본값: 마지막 축 -1)
+        #:return: float32 타입의 Envelope 배열
 
+		return np.abs(hilbert(signal_array, axis=axis_in)).astype(np.float32)
+
+	#@staticmethod
+	def compute_fft_cube(signal_array : np.ndarray, axis_in : int = -1) -> np.ndarray :
+		return np.abs(np.fft.rfft(signal_array, axis=-axis_in) / self.data.num_samples).astype(np.float32)
+
+
+	def compute_align_maps(self) -> None:
+		#1. Envelope Peak 방식 : Envelope의 Max Index  추출
+		self.data.align_map_envelope_peak = np.argmax(self.data.env_cube, axis=-1).astype(int)
+
+		#2. Cross Correlation 방식 : Ref 필수
+		self.data.align_map_cross_corr = np.zeros((self.data.num_rows,self.data.num_cols),dtype=int)
+		self.data.phase_inv_map = np.full((self.data.num_rows,self.data.num_cols),-1,dtype=int)
+
+		if self.ref_template is not None:
+			inv_start = self.data.config.phase_inv_search_start_offset_from_align
+			inv_end = self.data.config.phase_inv_search_end_offset_from_align
+
+			th_neg = self.data.config.phase_inv_neg_threshold
+			th_roi_ratio = self.data.config.phase_inv_roi_ratio
+			th_pos_ratio = self.data.config.phase_inv_whole_pos_ratio 
+
+			for r in range(self.data.num_rows):
+				for c in range(self.data.num_cols):
+					whole_sig = self.data.filtered_cube[r, c]
+					corr = np.correlate(whole_sig, self.data.ref_template, mode='same')
+					pos_idx = int(np.argmax(corr))
+					self.data.align_map_cross_corr[r, c] = pos_idx
+
+					# Phase Inversion 검출 (len(sig) 기준 경계)
+					s_idx = pos_idx + inv_start
+					e_idx = min(pos_idx + inv_end, len(whole_sig))
+
+					if s_idx < e_idx: #정상 검색 범위임
+						roi_corr = corr[s_idx:e_idx]
+						min_rel_idx = np.argmin(roi_corr) #argmin 인덱스
+						neg_val = roi_corr[min_rel_idx]
+						pos_val_in_whole_sig = corr[pos_idx]
+						max_val_roi = np.max(roi_corr) #max 값 자체
+
+						#Config 임계값 기반 판정
+						cond1 = neg_val < th_neg
+						cond2 = abs(neg_val) > (max_val_roi * th_roi_ratio)
+						cond3 = abs(neg_val) > (pos_val_in_whole_sig * th_pos_ratio)
+
+						if cond1 and cond2 and cond3 : 
+						#if (neg_val < -0.4) and (abs(neg_val) > max_val_roi * 1.0) and (abs(neg_val) > pos_val_in_whole_sig * 0.15):
+							self.data.phase_inv_map[r,c] = s_idx + min_rel_idx
+		else:
+			self.data.align_map_cross_corr = self.data.align_map_envelope_peak.copy()
+
+
+	def apply_tgc(self, roi_signal_cube : np.ndarray) -> np.ndarray : 
+
+		#ROI Signl CUBE에 Depth TGC 적용
+		if not self.data.config.tgc_enable : 
+			return roi_signal_cube
+
+		roi_len = roi_signal_cube.shape[-1]
+		indices = np.arange(roi_len)
+		depth_offset = np.maximum(0, indices - self.data.config.tgc_start_sample_from_align)
+		gain_dB = depth_offset * self.data.config.tgc_slope_dB
+		tgc_gain = (10.0 ** (gain_dB / 20.0)).astype(np.float32)
+
+		# In-place 곱셈 연산으로 메모리 효율 유지
+		roi_signal_cube *= tgc_gain
+		return roi_signal_cube
+
+
+	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
+
+		#Config Dynamic Range 파라미터를 적용한 8-bit Log Compression"""
+		data_safe = np.maximum(self.data.roi_env_cube_float_for_A, 0.0)
+
+		alpha = self.data.config.log_cmp_alpha
+		dr_dB = self.data.config.log_cmp_dynamic_range_dB
+
+		data_log = 20.0 * np.log10(1.0 + alpha * data_safe)
+
+		max_val = np.max(data_log)
+		min_cutoff = max_val - dr_dB
+		data_log = np.clip(data_log, min_cutoff, max_val)
+ 
+		norm_data = (data_log - min_cutoff) / dr_dB
+		_data_8bit =(norm_data * 255.0).astype(np.uint8)
+		return _data_8bit
+
+	
+	def update_roi_cube_A_B(self) -> None :
+
+		pre : int = self.data.config.align_pre_samples
+		post : int = self.data.config.align_post_samples
+		roi_len : int = pre + post
+
+		roi_signal_cube : np.ndarray = np.zeros((self.data.num_rows, self.data.num_cols, roi_len), dtype = np.float32)
+		active_align_map : Optional[np.ndarray] = self.data.active_align_map
+
+		#2D Align Map 좌표 기준으로 Boundary-safe ROI 슬라이싱
+		for r in range(self.data.num_rows):
+			for c in range(self.data.num_cols):
+				a_idx = active_align_map[r, c]
+
+				# CUBE 원본에서의 시작/끝 범위
+				r_start = a_idx - pre
+				r_end = a_idx + post
+
+				# 실제 CUBE 원본 데이터 경계(Boundary) 제한
+				s_start = max(0, r_start)
+				s_end = min(self.data.num_samples, r_end)
+
+				# roi_signal_cube 내부에 복사될 위치 (Offset 계산)
+				t_start = s_start - r_start  # 0 이상이며, pre 값을 초과하지 않음
+				t_end = t_start + (s_end - s_start)  # 항상 양수이며, roi_len(pre+post) 이하
+
+				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)
+				if s_start < s_end:
+					roi_signal_cube[r, c, t_start:t_end] = self.filtered_cube[r, c, s_start:s_end]
+				else:
+					pass# zero padding
+
+		# 1. TGC 적용 후 Float CUBE 저장				
+		self.data.roi_cube_float_for_A = self.apply_tgc(roi_signal_cube) #self.roi_cube_float_for_A는 TGC가 기본 적용임
+
+		# 2. 범용 extract_envelope 함수를 통해 ROI Envelope 계산
+		self.data.roi_env_cube_float_for_A = self.extract_envelope(self.data.roi_cube_float_for_A)
+
+		# 3. B-Scan용 8-bit Log CUBE 생성
+		self.data.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_cube_float_for_A)
 
 
 # ==========================================
 # 2. 3D Cube Data Engine (2D Align ndarray 기반)
 # ==========================================
-
+'''
 class UltrasoundCubeEngine : 
 	def __init__(self, config: ExperimentConfig) -> None:
 
@@ -473,6 +610,7 @@ class UltrasoundCubeEngine :
 		# 3. B-Scan용 8-bit Log CUBE 생성
 		self.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.roi_cube_float_for_A)
 
+'''
 # ==========================================
 # 3. GUI Processor (Tkinter Interface)
 # ==========================================
