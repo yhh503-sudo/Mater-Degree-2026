@@ -4,7 +4,7 @@ from matplotlib.gridspec import GridSpec
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable, Dict
 import math
 import os
 import matplotlib
@@ -16,6 +16,29 @@ import ctypes
 import time
 #SciPy 신호처리 모듈
 from scipy.signal import butter, hilbert, filtfilt
+
+
+#0. Publisher / Observer Event
+class DataEventPublisher : 
+	#데이터 및 Config 변경 이벤트를 구독자에게 알리는 이벤트 발행자 클래스
+	def __init__(self):
+		self._subscribers : Dict[str, List[Callable[[],None]]] = {} ## 단순히 { "이벤트이름": [콜백함수1, 콜백함수2] } 형태
+		#Callable = _CallableType(collections.abc.Callable, 2)
+
+	def subscribe(self, event_type_in : str, callback_in : Callable[[], None]) -> None : 
+		#특정 이벤트에 대한 구독자(Callback) 등록
+		if event_type_in not in self._subscribers :
+			self._subscribers[event_type_in] = []
+		self._subscribers[event_type_in].append(callback_in)
+
+	def notify(self, _event_type_in : str) -> None : 
+		'''등록된 구독자들에게 이벤트 발생 통보'''
+		if _event_type_in in self._subscribers : 
+			for _callback in self._subscribers[_event_type_in] :
+					_callback()
+
+
+
 
 # 실험 장비 및 환경 설정 관리 클래스
 @dataclass(slots=True)
@@ -60,10 +83,12 @@ class ExperimentConfig :
 
 	def __post_init__(self): # 직후에 자동으로 실행되도록 약속된 특수 메서드
 		#probe center freq 기반으로 필터 컷오프 주파수 동적 계산
+		self.update_filter_cutoffs()
+
+	def update_filter_cutoffs(self) :
 		fc_mhz = self.probe_center_freq / 1e6
 		self.filter_lowcut_MHz =max(0.0, fc_mhz / 3.0)
 		self.filter_highcut_MHz = fc_mhz * 2.0
-
 
 
 # 2. 순수 데이터 컨테이너 (slots = True 메모리 최적화)
@@ -77,6 +102,10 @@ class UltrasoundCubeData :
 	num_rows : int = 0
 	num_cols : int = 0
 	num_samples : int = 0
+
+	#현재 선택 상태 (Publisher - Subscriber 패턴)
+	active_row : int = 0
+	active_col : int = 0
 
 	#3D Cubes
 	raw_cube : Optional[np.ndarray] =				None  # int16
@@ -105,8 +134,9 @@ class UltrasoundCubeData :
 #3. 신호처리 및 연산 전담 엔진
 
 class UltrasoundProcessorEngine:
-	def __init__(self, data :UltrasoundCubeData) -> None : 
+	def __init__(self, data :UltrasoundCubeData, publisher_in : DataEventPublisher) -> None : 
 		self.data : UltrasoundCubeData = data
+		self.publisher : DataEventPublisher = publisher_in
 
 	def load_files_to_cube(self, file_paths : List[str])->bool : 
 		if not file_paths:
@@ -141,6 +171,10 @@ class UltrasoundProcessorEngine:
 			
 			#전체 3D 큐브 파이프라인 연산
 			self.process_cube_pipeline()
+
+			#Event Notify] 전체 데이터로 로드 완료
+			self.publisher.notify("DATA_LOADED")
+
 			return True
 
 		except Exception as e:
@@ -179,6 +213,25 @@ class UltrasoundProcessorEngine:
 		#5. roi cube : a, b 스캔 만듦
 		#self.update_active_align_map_pointer()  # 포인터 최우선 갱신
 		self.update_roi_cube_A_B()
+
+
+	def set_active_selection(self, row_in : int, col_in : int) -> None : 
+		#사용자 위치 선택 변경 처리 : 핵심 Notify
+		row_changed = (self.data.active_row != row_in)
+		self.data.active_row = max(o, min(row_in, self. data.num_rows -1))
+		self.data.active_col = max(o, min(col_in, self. data.num_cols -1))
+
+		#Event Notify 위치 변경 발생 통보
+		if row_changed :
+			self.publisher.notify("ROW_CHANGED") #ROW_CHANGED가 먼저 터져서 B-Scan 이미지를 새로 그린 뒤, SELECTION_CHANGED가 터져서 A-Scan과 커서를 맞춰 그려줍니다.
+		self.publisher.notify("SELECTION_CHANGED") #Col 변경 (비용이 매우 작음 ➔ 얇은 선/A-Scan 하나만 이동)
+				
+	def set_align_method(self, method_in : str) -> None :
+		#Align 방식 변경 처리
+		self.data.config.align_method = method_in
+		self.update_roi_cube_A_B()
+		#[Event Notify] ROI 데이터 재계산 완료 통보
+		self.publisher.notify("ROI_UPDATED")
 
 
 	def update_active_align_map_pointer(self) -> None :
@@ -332,7 +385,7 @@ class UltrasoundProcessorEngine:
 		self.data.roi_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_env_cube_float_for_A)
 
 # ==========================================
-# 3. GUI Processor (Tkinter Interface)
+# 3. GUI Processor (Tkinter Interface) : Subscriber / Event-Driven View
 # ==========================================
 
 class UltrasoundSignalViewer:
@@ -341,12 +394,14 @@ class UltrasoundSignalViewer:
 		self.window.title("Ultrasound Signal Processor : Pure Functions")
 		self.window.geometry("1280x800")
 
+		#인프라 객체 생성
+		self.publisher : DataEventPublisher = DataEventPublisher()
 		self.config : ExperimentConfig= ExperimentConfig()
 		self.data : UltrasoundCubeData = UltrasoundCubeData(config=self.config)
 		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data)
 
-		self.current_row_idx = 0
-		self.current_col_idx = 0
+		# self.current_row_idx = 0
+		# self.current_col_idx = 0
 		self.view_mode_var = tk.StringVar(value = 'raw')
 		self.align_method_var = tk.StringVar(value = self.config.align_method)
 
@@ -359,6 +414,55 @@ class UltrasoundSignalViewer:
 		self.bscan_2d_gray : Optional[np.ndarray] = None 		# 1채널 흑백 버퍼 캐시
 
 		self.create_widgets()
+		#구독 패턴 등록
+		self.register_event_subscriptions(self)
+
+	def register_event_subscriptions(self) :
+		#이벤트 발행 시, 실행될 UI 콜백(Observer) 메서드 등록
+		self.publisher.subscribe("DATA_LOADED",self.on_event_data_loaded)
+		self.publisher.subscribe("ROW_CHANGED",self.render_bscan)
+		self.publisher.subscribe("SELECTION_CHANGED", self.update_ascan_plots)
+		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
+
+
+#Event Driven Subscriber Callbacks (이벤트 반응 함수들)
+	def on_event_data_loaded(self) :
+
+		#'DATA_LOADED' 이벤트 수신 시 수행 : open_csvs(self) 의 일부를 대체
+		
+		self.spin_row.config(from_=0, to=self.data.num_rows -1)
+		self.spin_col.config(from_=0, to=self.data.num_cols - 1)
+
+		self.spin_row.delete(0, tk.END); self.spin_row.insert(0, "0")
+		self.spin_col.delete(0, tk.END); self.spin_col.insert(0, "0")
+
+		self.lbl_shape_info.config(text=f'{self.data.num_rows}Rows*{self.data.num_cols}Cols')
+		self.update_loaded_label()
+
+		self.ax_whole.set_xlim(0, self.data.num_samples)
+		self.line_whole_sig.set_xdata(self.data.shared_sample_indices)
+		self.line_whole_env.set_xdata(self.data.shared_sample_indices)
+
+		self.line_fft.set_xdata(self.data.shared_fft_freqs_MHz)#데이터 자체는 0Hz부터 나이퀴스트 주파수(Sampling Rate의 절반, 예: 500MHz)까지
+		self.ax_fft.set_xlim(self.config.filter_lowcut_MHz, self.config.filter_highcut_MHz)#set_xlim()에 의해 Matplotlib의 화면 출력 범위(시야)만 밴드패스 필터 구간으로 잘라서 보여
+				
+
+		roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
+		self.ax_roi.set_xlim(-self.config.align_pre_samples, self.config.align_post_samples)
+		self.line_roi_sig_for_A.set_xdata(roi_x)
+		self.line_roi_env.set_xdata(roi_x)
+
+		self.render_bscan()
+		self.update_ascan_plots()
+
+def on_event_roi_updated(self):
+
+	#'ROI_UPDATED' 이벤트 수신시 수행
+
+	self.render_bscan()
+	self.update_ascan_plots()
+	
+
 
 	def create_widgets(self) : 
 
