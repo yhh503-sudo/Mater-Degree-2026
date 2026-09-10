@@ -20,7 +20,11 @@ from scipy.signal import butter, hilbert, filtfilt
 
 #0. Publisher / Observer Event
 class DataEventPublisher : 
+
 	#데이터 및 Config 변경 이벤트를 구독자에게 알리는 이벤트 발행자 클래스
+	#엔진은 UI가 누구인지, 존재하는지조차 모릅니다. 메모리는 똑같이 쓰지만 연락망(Publisher)만 이용합니다.
+	#UI를 Tkinter에서 Web으로 바꾸든, CLI로 바꾸든, UI를 3개 더 추가하든 Engine 코드는 단 한 줄도 수정할 필요가 없습니다.
+
 	def __init__(self):
 		self._subscribers : Dict[str, List[Callable[[],None]]] = {} ## 단순히 { "이벤트이름": [콜백함수1, 콜백함수2] } 형태
 		#Callable = _CallableType(collections.abc.Callable, 2)
@@ -218,13 +222,16 @@ class UltrasoundProcessorEngine:
 	def set_active_selection(self, row_in : int, col_in : int) -> None : 
 		#사용자 위치 선택 변경 처리 : 핵심 Notify
 		row_changed = (self.data.active_row != row_in)
-		self.data.active_row = max(o, min(row_in, self. data.num_rows -1))
-		self.data.active_col = max(o, min(col_in, self. data.num_cols -1))
+		self.data.active_row = max(0, min(row_in, self. data.num_rows -1))
+		self.data.active_col = max(0, min(col_in, self. data.num_cols -1))
 
 		#Event Notify 위치 변경 발생 통보
 		if row_changed :
 			self.publisher.notify("ROW_CHANGED") #ROW_CHANGED가 먼저 터져서 B-Scan 이미지를 새로 그린 뒤, SELECTION_CHANGED가 터져서 A-Scan과 커서를 맞춰 그려줍니다.
-		self.publisher.notify("SELECTION_CHANGED") #Col 변경 (비용이 매우 작음 ➔ 얇은 선/A-Scan 하나만 이동)
+
+		self.publisher.notify("SELECTION_CHANGED") 
+		#특정 좌표 $(Row, Col)$ 위치의 단일 A-Scan 신호(1D 파형), Spectrum(FFT), 그리고 B-Scan 영상 위의 초록색 커서 선 위치를 이동
+
 				
 	def set_align_method(self, method_in : str) -> None :
 		#Align 방식 변경 처리
@@ -389,12 +396,15 @@ class UltrasoundProcessorEngine:
 # ==========================================
 
 class UltrasoundSignalViewer:
+
+	#스스로 그래프를 그리는 것이 아니라, Engine에서 알림(Notify)이 날아오면 그 반응으로 화면을 업데이트
 	def __init__(self) : 
 		self.window = tk.Tk()
 		self.window.title("Ultrasound Signal Processor : Pure Functions")
 		self.window.geometry("1280x800")
 
-		#인프라 객체 생성
+		#인프라 객체 생성 :  Publisher를 전체 시스템이 공유
+
 		self.publisher : DataEventPublisher = DataEventPublisher()
 		self.config : ExperimentConfig= ExperimentConfig()
 		self.data : UltrasoundCubeData = UltrasoundCubeData(config=self.config)
@@ -418,14 +428,19 @@ class UltrasoundSignalViewer:
 		self.register_event_subscriptions(self)
 
 	def register_event_subscriptions(self) :
-		#이벤트 발행 시, 실행될 UI 콜백(Observer) 메서드 등록
+
+		# 구독(Subscribe) 등록: 특정 이벤트 시 내 UI 업데이트 메서드들을 연결!
+        # ----------------------------------------------------------------------
+		# 이벤트 발행 시, 실행될 UI 콜백(Observer) 메서드 등록
+
 		self.publisher.subscribe("DATA_LOADED",self.on_event_data_loaded)
 		self.publisher.subscribe("ROW_CHANGED",self.render_bscan)
 		self.publisher.subscribe("SELECTION_CHANGED", self.update_ascan_plots)
 		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
 
-
-#Event Driven Subscriber Callbacks (이벤트 반응 함수들)
+	# Subscriber Callbacks (이벤트 반응 함수들)
+	# Event Driven Subscriber Callbacks (이벤트 반응 함수들)
+	
 	def on_event_data_loaded(self) :
 
 		#'DATA_LOADED' 이벤트 수신 시 수행 : open_csvs(self) 의 일부를 대체
@@ -455,13 +470,192 @@ class UltrasoundSignalViewer:
 		self.render_bscan()
 		self.update_ascan_plots()
 
-def on_event_roi_updated(self):
+	def on_event_roi_updated(self):
 
-	#'ROI_UPDATED' 이벤트 수신시 수행
-
-	self.render_bscan()
-	self.update_ascan_plots()
+		#'ROI_UPDATED' 이벤트 수신시 수행
+		self.render_bscan()
+		self.update_ascan_plots()
 	
+#
+# UI 이벤트 핸들러 : 사용자 입력 -> Engine 으로 전달하는 통로
+#
+
+
+	def on_row_change(self) -> None : 
+		# UI 이벤트 핸들러 (사용자 입력 -> Engine으로 전달하는 통로)
+		# ROW 변경시 : B-San 전체 재 랜더링 + A-Scan 업데이트
+		"""UI에서 스핀박스로 Row 조작 시"""
+		try:
+			r = int(self.spin_row.get())
+			c = int(self.spin_col.get())
+			# UI가 직접 랜더링하는 것이 아니라 Engine의 위치를 바꾸면,
+			# Engine이 알고리즘 판단 후 ROW_CHANGED / SELECTION_CHANGED 이벤트를 던집니다.
+			self.engine.set_active_selection(r,c)
+			self.update_loaded_label()
+		except ValueError : 
+			pass
+	
+	def on_col_change(self) -> None :
+		# col 변경시 : 커서 및 a-scan 그래프만 경량 업데이트
+		# UI에서 스핀박스로 Col 조작시
+		try :
+			r = int(self.spin_row.get())
+			c = int(self.spin_col.get())
+			self.engine.set_active_selection(r,c) 
+		except ValueError:
+			pass
+
+	def on_align_change(self) : 
+		#Align 방식 변경시
+		self.engine.set_align_method(self.align_method_var.get())
+
+	
+	def on_phase_inv_toggle(self):
+		"""Blue 오버레이 토글 시"""
+		self.render_bscan()
+		self.update_ui()
+	
+
+	def open_csvs(self) -> None:
+		paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+		if not paths :
+			return
+		else:
+			#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
+			self.engine.load_files_to_cube(list(paths))
+
+#
+# 화면 랜더링 함수들 (UI 업데이트)
+#
+
+
+	def render_bscan(self) : 
+
+		"""B-Scan 2D 이미지 갱신"""
+		#1. B Scan 1채널 흑백 버퍼 캐싱 및 Phaser Inverse RGB 오버레이
+
+		if self.data.roi_cube_8bit_for_B is None :
+			raise ValueError("B스캔 버퍼 만들기 실패. 큐브 생성 파이프라인을 실행한 적이 없습니다") 
+			return
+
+		r = self.data.active_row
+		self.bscan_2d_gray = self.data.roi_cube_8bit_for_B[r].T #전치
+		h, w = self.bscan_2d_gray.shape
+	
+		pre = self.config.align_pre_samples
+		post = self.config.align_post_samples
+		extent = [0, w-1, post, -pre]
+
+		#2. Phase Inverser 토글 조건 분기 (메모리 재할당 최소화)
+		cond1 = self.phase_inverse_var.get() == "blue_apply"
+		cond2 = self.data.phase_inv_map is not None
+		is_blue_apply = cond1 and cond2
+	
+		if is_blue_apply :
+			# RGB 3채널 배열 생성 (오버레이 적용 시에만 동적 할당)
+			display_data = np.stack([self.bscan_2d_gray] * 3, axis = -1)
+			self.engine.update_active_align_map_pointer()
+			active_align_map = self.data.active_align_map
+	
+			## Vectorized 또는 범위 검증 루프
+			for c in range(w) : 
+				inv_abs_idx = self.data.phase_inv_map[r, c]
+				if inv_abs_idx != -1:
+					align_abs_idx = active_align_map[r, c]
+					rel_idx = inv_abs_idx - align_abs_idx + pre #이래야 ROI(-100,500)에 맞음
+					if 0 <= rel_idx < h : #제외 : ROI 표시 시작점(align_abs_idx - pre)보다 더 앞쪽에 찍힌 경우
+						display_data[rel_idx,c] = [0,0,255] #파란색 마킹
+		else:
+			#no apply 상태일 떄는 원본 2d grey 버퍼를 그대로 참조 (메모리 복사 없음)
+			display_data = self.bscan_2d_gray
+
+
+		#3. AxesImage 갱신 및 캔버스 동기화	
+		# 이미지 객체 재사용 (Image Object Reuse)
+		if self.bscan_img_display is not None:
+			self.bscan_img_display.set_data(display_data) #data 교체 끼우기
+			self.bscan_img_display.set_extent(extent)
+	
+		else: #처음 딱 한번 글일 떄 시행됨
+			self.bscan_img_display = self.ax_bscan.imshow( #객체 생성
+				display_data, 
+				cmap = 'gray' if display_data.ndim == 2 else None,
+				aspect = 'auto', origin = 'upper', extent = extent
+			)
+			self.line_bscan_cursor.set_visible(True)
+
+		#굳이 이것을?
+		#self.canvas.draw_idle()			
+
+
+
+	def update_ascan_plots(self) -> None :  #전체 plot들 업데이트
+	
+		#"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체) + 전체 Draw"""
+		# SELECTION_CHANGED 발생 시 실행 : A-Scan들 및 커서 위치만 경량 업데이트
+
+		if self.data.raw_cube is None : 
+			print(f"UI 업데이트 실패 : raw cube가 없음")
+			return
+		
+		r,c = self.data.active_row, self.data.active_col
+		mode = self.view_mode_var.get()
+	
+		if mode == 'raw' : 
+			sig = self.data.raw_cube[r,c]
+			env = self.data.env_cube[r,c]
+			fft_mag = self.data.raw_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
+		else:
+			sig = self.data.filtered_cube[r,c]
+			env = self.data.env_cube[r,c]
+			fft_mag = self.data.filtered_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
+	
+		#1. Whole Ascan plot
+		self.line_whole_sig.set_ydata(sig)
+		self.line_whole_env.set_ydata(env)
+	
+		## 표시 라인 빠른 업데이트 : Align 및 Phase Inverse 마커 위치 업데이트
+		self.engine.update_active_align_map_pointer()
+		align_idx : int = self.data.active_align_map[r,c]
+		self.line_align_mark.set_xdata([align_idx, align_idx])
+		inv_idx = self.data.phase_inv_map[r,c]
+	
+		if inv_idx != -1:
+			self.line_inv_mark.set_xdata([inv_idx, inv_idx])
+			self.line_inv_mark.set_visible(True)
+			self.ax_roi.set_title(f"ROI Align : {align_idx}, Inverse : {inv_idx}", fontsize=9, fontweight='bold')
+			
+		else : 
+			self.line_inv_mark.set_visible(False)
+			self.ax_roi.set_title(f"ROI Align : {align_idx}", fontsize=9, fontweight='bold')
+
+			
+		#2. FFT Spectrum : 사전 계산된 배열 슬라이싱 사용
+		self.line_fft.set_ydata(fft_mag)
+		peak_freq_idx = np.argmax(fft_mag)
+		peak_freq_MHz = self.data.shared_fft_freqs_MHz[peak_freq_idx]
+		self.ax_fft.set_title(f"FFT: Peak={peak_freq_MHz:.1f}MHz", fontsize=9, fontweight='bold')
+		self.line_fft_peak.set_xdata([peak_freq_MHz, peak_freq_MHz])
+	
+		max_mag = np.max(fft_mag)
+		self.ax_fft.set_ylim(0, max_mag * 1.1 if max_mag > 0 else 1)
+	
+		#3. ROI Signal(Y축만 교체)
+		if self.data.roi_cube_float_for_A is not None : 	
+			self.line_roi_sig_for_A.set_ydata(self.data.roi_cube_float_for_A[r,c])
+			self.line_roi_env.set_ydata(self.data.roi_env_cube_float_for_A[r,c])
+				
+		
+		#B-Scan Cursor 위치 갱신 : c에 의해, 실시간 바뀜
+		self.line_bscan_cursor.set_xdata([c,c])
+
+		self.canvas.draw_idle()#CPU가 Idle(한가한) 상태가 되거나, 이벤트 루프가 돌아올 때 그려집니다.
+								#여러 번 호출되어도 마지막 1번만 그려집니다
+			
+
+	# --------------------------------------------------------------------------
+    # UI 생성 루틴
+    # --------------------------------------------------------------------------
 
 
 	def create_widgets(self) : 
@@ -585,46 +779,7 @@ def on_event_roi_updated(self):
 		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00', lw=1.5, visible=False)
 	
 		self.fig.tight_layout()
-	
-	def open_csvs(self):
-		paths = tk.filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
-		if not paths : return
-	
-		if self.engine.load_files_to_cube(list(paths)):
 
-			self.spin_row.config(from_=0, to=self.data.num_rows - 1)
-			self.spin_col.config(from_=0, to=self.data.num_cols - 1)
-	
-			self.spin_row.delete(0,tk.END); self.spin_row.insert(0, "0")
-			self.spin_col.delete(0, tk.END); self.spin_col.insert(0, "0")
-
-			self.current_row_idx = 0
-			self.current_col_idx = 0
-
-			self.lbl_shape_info.config(text=f'{self.data.num_rows}Rows*{self.data.num_cols}Cols')
-			self.update_loaded_label()
-	
-			#축 범위 한정(최초 1회만 바인딩) : 1. Whole A-Scan X축 설정
-			self.ax_whole.set_xlim(0, self.data.num_samples)
-			self.line_whole_sig.set_xdata(self.data.shared_sample_indices)
-			self.line_whole_env.set_xdata(self.data.shared_sample_indices)
-			self.ax_roi.set_xlim(-self.config.align_pre_samples, self.config.align_post_samples)
-	
-			#FFT 그래프 : xlimt 동적 계산 (Center F의 1/3~2배)
-			self.ax_fft.set_xlim(self.config.filter_lowcut_MHz,self.config.filter_highcut_MHz)
-			self.line_fft.set_xdata(self.data.shared_fft_freqs_MHz)
-
-			## 3. ROI X축 설정 (Signal과 Envelope '둘 다' 설정해야 함)
-			roi_x  = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
-			self.ax_roi.set_xlim(-self.config.align_pre_samples, self.config.align_post_samples)
-			self.line_roi_sig_for_A.set_xdata(roi_x)
-			self.line_roi_env.set_xdata(roi_x)		
-	
-			# 4. B 스캔 img 만들기
-			self.render_bscan()
-			
-			## 5. A 그래프들 업데이트 & Draw
-			self.update_ui()
 
 
 	
@@ -633,152 +788,7 @@ def on_event_roi_updated(self):
 			return
 		filename = os.path.basename(self.data.file_paths[self.current_row_idx])
 		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
-	
-	def render_bscan(self) : 
-	
-		#1. B Scan 1채널 흑백 버퍼 캐싱 및 Phaser Inverse RGB 오버레이
-		
-		if self.data.roi_cube_8bit_for_B is None :
-			raise ValueError("B스캔 버퍼 만들기 실패. 큐브 생성 파이프라인을 실행한 적이 없습니다") 
-			return
-		
-		self.bscan_2d_gray = self.data.roi_cube_8bit_for_B[self.current_row_idx].T #전치
-		h, w = self.bscan_2d_gray.shape
-	
-		pre = self.config.align_pre_samples
-		post = self.config.align_post_samples
-		extent = [0, w-1, post, -pre]
-
-		#2. Phase Inverser 토글 조건 분기 (메모리 재할당 최소화)
-		cond1 = self.phase_inverse_var.get() == "blue_apply"
-		cond2 = self.data.phase_inv_map is not None
-		is_blue_apply = cond1 and cond2
-	
-		if is_blue_apply :
-			# RGB 3채널 배열 생성 (오버레이 적용 시에만 동적 할당)
-			display_data = np.stack([self.bscan_2d_gray] * 3, axis = -1)
-			self.engine.update_active_align_map_pointer()
-			active_align_map = self.data.active_align_map
-	
-			## Vectorized 또는 범위 검증 루프
-			for c in range(w) : 
-				inv_abs_idx = self.data.phase_inv_map[self.current_row_idx,c]
-				if inv_abs_idx != -1:
-					align_abs_idx = active_align_map[self.current_row_idx, c]
-					rel_idx = inv_abs_idx - align_abs_idx + pre #이래야 ROI(-100,500)에 맞음
-					if 0 <= rel_idx < h : #제외 : ROI 표시 시작점(align_abs_idx - pre)보다 더 앞쪽에 찍힌 경우
-						display_data[rel_idx,c] = [0,0,255] #파란색 마킹
-		else:
-			#no apply 상태일 떄는 원본 2d grey 버퍼를 그대로 참조 (메모리 복사 없음)
-			display_data = self.bscan_2d_gray
-	
-		#3. AxesImage 갱신 및 캔버스 동기화
-	
-		# 이미지 객체 재사용 (Image Object Reuse)
-		if self.bscan_img_display is not None:
-			self.bscan_img_display.set_data(display_data) #data 교체 끼우기
-			self.bscan_img_display.set_extent(extent)
-	
-		else: #처음 딱 한번 글일 떄 시행됨
-			self.bscan_img_display = self.ax_bscan.imshow( #객체 생성
-				display_data, 
-				cmap = 'gray' if display_data.ndim == 2 else None,
-				aspect = 'auto', origin = 'upper', extent = extent
-			)
-			self.line_bscan_cursor.set_visible(True)
-		
-	
-	def on_row_change(self) : 
-		#ROW 변경시 : B-San 전체 재 랜더링 + A-Scan 업데이트
-		try:
-			self.current_row_idx = int(self.spin_row.get()) #UI-> 엔진
-			self.update_loaded_label()
-			self.render_bscan()
-			self.update_ui()
-		except ValueError : 
-			pass
-	
-	def on_col_change(self):
-		#col 변경시 : 커서 및 a-scan 그래프만 경량 업데이트
-		try : 
-			self.current_col_idx = int(self.spin_col.get())
-			self.update_ui() #에 의해서, b scan 위치 커서 또한 자동 업데이트됨
-		except ValueError:
-			pass
-	
-	def on_align_change(self) : 
-		self.config.align_method = self.align_method_var.get() #ui 정보-> config에 입력
-		self.engine.update_roi_cube_A_B()
-		self.render_bscan()
-		self.update_ui()
-	
-	def on_phase_inv_toggle(self):
-		self.render_bscan()
-		self.update_ui()
-	
-	def update_ui(self) :  #전체 plot들 업데이트
-	
-		"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체) + 전체 Draw"""
-
-
-		if self.data.raw_cube is None : 
-			print(f"UI 업데이트 실패 : raw cube가 없음")
-			return
-		r,c = self.current_row_idx, self.current_col_idx
-		mode = self.view_mode_var.get()
-	
-		if mode == 'raw' : 
-			sig = self.data.raw_cube[r,c]
-			env = self.data.env_cube[r,c]
-			fft_mag = self.data.raw_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
-		else:
-			sig = self.data.filtered_cube[r,c]
-			env = self.data.env_cube[r,c]
-			fft_mag = self.data.filtered_fft_mag_cube[r,c] # 사전 계산된 FFT 슬라이싱
-	
-		#1. Whole Ascan plot
-		self.line_whole_sig.set_ydata(sig)
-		self.line_whole_env.set_ydata(env)
-	
-		## 표시 라인 빠른 업데이트 : Align 및 Phase Inverse 마커 위치 업데이트
-		#active_map = self.engine.get_current_align_map()
-		self.engine.update_active_align_map_pointer()
-		align_idx : int = self.data.active_align_map[r,c]
-		self.line_align_mark.set_xdata([align_idx,align_idx])
-		inv_idx = self.data.phase_inv_map[r,c]
-	
-		if inv_idx != -1:
-			self.line_inv_mark.set_xdata([inv_idx,inv_idx])
-			self.line_inv_mark.set_visible(True)
-			self.ax_roi.set_title(f"ROI Align : {align_idx}, Inverse : {inv_idx}", fontsize=9, fontweight='bold')
-			
-		else : 
-			self.line_inv_mark.set_visible(False)
-			self.ax_roi.set_title(f"ROI Align : {align_idx}", fontsize=9, fontweight='bold')
-
-			
-		#2. FFT Spectrum : 사전 계산된 배열 슬라이싱 사용
-		self.line_fft.set_ydata(fft_mag)
-		peak_freq_idx = np.argmax(fft_mag)
-		peak_freq_MHz = self.data.shared_fft_freqs_MHz[peak_freq_idx]
-		self.ax_fft.set_title(f"FFT: Peak={peak_freq_MHz:.1f}MHz", fontsize=9, fontweight='bold')
-		self.line_fft_peak.set_xdata([peak_freq_MHz, peak_freq_MHz])
-	
-		max_mag = np.max(fft_mag)
-		self.ax_fft.set_ylim(0, max_mag * 1.1 if max_mag > 0 else 1)
-	
-		#3. ROI Signal(Y축만 교체)
-		if self.data.roi_cube_float_for_A is not None : 	
-			self.line_roi_sig_for_A.set_ydata(self.data.roi_cube_float_for_A[r,c])
-			self.line_roi_env.set_ydata(self.data.roi_env_cube_float_for_A[r,c])
-				
-		
-		#B-Scan Cursor 위치 갱신 : c에 의해, 실시간 바뀜
-		self.line_bscan_cursor.set_xdata([c,c])
-
-		self.canvas.draw_idle()#CPU가 Idle(한가한) 상태가 되거나, 이벤트 루프가 돌아올 때 그려집니다.
-								#여러 번 호출되어도 마지막 1번만 그려집니다
-								
+						
 	def on_bscan_hover(self,event) : 
 		#ctrl + 마우스 이동 시 쓰트롤링 업데이트
 		if event.inaxes == self.ax_bscan and event.key == 'control' :
