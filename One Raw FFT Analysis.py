@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # 1. 데이터 로드 (CSV 파일명은 사용자에 맞게 수정)
-filename = 'ultrasound_data.csv'  # 실제 파일명으로 변경하세요.
+filename = 'umedsys 150MHz.csv'  # 실제 파일명으로 변경하세요.
 try:
     data = np.loadtxt(filename, delimiter=',')
 except FileNotFoundError:
@@ -88,6 +88,8 @@ plt.ylabel('Magnitude (dB)')
 plt.ylim([-80, 5]) # dB 축 범위 설정
 plt.grid(True)
 
+plt.xlim([0, 200]) # 이 줄이 추가된 핵심입니다.
+
 # 중심 주파수 표시
 plt.axvline(x=center_freq / 1e6, color='r', linestyle='--', label=f'Center Freq: {center_freq/1e6:.2f} MHz')
 
@@ -103,7 +105,7 @@ plt.legend(loc='upper right') # 범례 표시 위치 설정
 plt.tight_layout() # 서브플롯 간격 조정
 
 # 결과 이미지 저장 (또는 plt.show()로 화면에 표시)
-plt.savefig('ultrasound_fft_result.png') # 이미지 파일로 저장
+plt.savefig(f'{filename}.png') # 이미지 파일로 저장
 # plt.show() # 화면에 직접 표시하려면 이 줄의 주석을 해제하세요.
 
 print(f"FFT 분석 결과가 'ultrasound_fft_result.png' 파일로 저장되었습니다.")
