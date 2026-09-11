@@ -108,7 +108,7 @@ class UltrasoundCubeData :
 	num_samples : int = 0
 
 	#현재 선택 상태 (Publisher - Subscriber 패턴)
-	active_row : int = 0
+	active_row : int = 0  #self.data라는 하나의 데이터 객체 메모리에만 존재
 	active_col : int = 0
 
 	#3D Cubes
@@ -122,7 +122,7 @@ class UltrasoundCubeData :
 	#2D Maps
 	align_map_envelope_peak: Optional[np.ndarray] = None   # int
 	align_map_cross_corr: Optional[np.ndarray] = None      # int
-	active_align_map : Optional[np.ndarray] = None		   ## 포인터 참조 (Zero-copy)
+	active_align_map : Optional[np.ndarray] = None		   ## 포인터 참조 (Zero-copy) #self.data라는 하나의 데이터 객체 메모리에만 존재
 	phase_inv_map: Optional[np.ndarray] = None             # int
 
 	#3D FFT Magnitude Cubes
@@ -408,7 +408,8 @@ class UltrasoundSignalViewer:
 		self.publisher : DataEventPublisher = DataEventPublisher()
 		self.config : ExperimentConfig= ExperimentConfig()
 		self.data : UltrasoundCubeData = UltrasoundCubeData(config=self.config)
-		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data)
+		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data, publisher_in=self.publisher)
+		
 
 		# self.current_row_idx = 0
 		# self.current_col_idx = 0
@@ -682,7 +683,7 @@ class UltrasoundSignalViewer:
 		#3. Spinboxes
 		ttk.Label(control_frame, text= 'Row Index ', font=("Segoe UI", 11, "bold")).grid(row=0, column=3, padx=2, pady=2)
 		self.spin_row = ttk.Spinbox(control_frame, from_=0, to=0, width=5, command = self.on_row_change)
-		self.spin_row.grid(row=0,column=4,padx=5,pady=2)
+		self.spin_row.grid(row=0, column=4, padx=5, pady=2)
 		self.spin_row.bind('<Return>', lambda e: self.on_row_change())
 
 		ttk.Label(control_frame,text='Col Index').grid(row=1,column=3,padx=2, pady=2, sticky="e")
@@ -718,10 +719,6 @@ class UltrasoundSignalViewer:
 		ttk.Label(control_frame, text = 'Phase Inverse :', font=("Segoe UI", 9, "bold")).grid(row=0, column=12, padx=(0, 5), pady=2)
 		ttk.Radiobutton(control_frame,text="Blue Apply", variable=self.phase_inverse_var, value = "blue_apply", command =self.on_phase_inv_toggle).grid(row=0,column=13,padx=3,pady=2,sticky='w')
 		ttk.Radiobutton(control_frame,text="No Apply",variable=self.phase_inverse_var,value="no_apply",command=self.on_phase_inv_toggle).grid(row=1,column=13,padx=3,pady=2,sticky='w')
-
-		#Row 1 Controls
-		sub_row1_frame = ttk.Frame(control_frame)
-		sub_row1_frame.grid(row=1,column=0,columnspan=4,sticky='w',pady=(5,0))
 
 				
 		#Main Plot Layout
@@ -788,6 +785,7 @@ class UltrasoundSignalViewer:
 			return
 		filename = os.path.basename(self.data.file_paths[self.current_row_idx])
 		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
+
 						
 	def on_bscan_hover(self,event) : 
 		#ctrl + 마우스 이동 시 쓰트롤링 업데이트
@@ -803,10 +801,13 @@ class UltrasoundSignalViewer:
 					if current_time - self.last_ascan_update_time > 0.1 :
 
 						self.last_ascan_update_time = current_time
-						self.current_col_idx = _col
+
+						#UI스핀 박스를 직접 고치는 것이 아니라, Engine을 통과시킵니다
+						#self.current_col_idx = _col
 						self.spin_col.delete(0, tk.END)
 						self.spin_col.insert(0, str(_col)) #스핀박스도 바뀜. 그러나, on_col_change()이벤트는 미발생
-						self.update_ui()
+						#self.update_ui()
+						self.engine.set_active_selection(self.data.active_row,_col)
 
 	def run(self) :
 		self.window.mainloop()
