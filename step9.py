@@ -409,7 +409,7 @@ class UltrasoundSignalViewer:
 		self.config : ExperimentConfig= ExperimentConfig()
 		self.data : UltrasoundCubeData = UltrasoundCubeData(config=self.config)
 		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data, publisher_in=self.publisher)
-		
+
 
 		# self.current_row_idx = 0
 		# self.current_col_idx = 0
@@ -434,7 +434,7 @@ class UltrasoundSignalViewer:
         # ----------------------------------------------------------------------
 		# 이벤트 발행 시, 실행될 UI 콜백(Observer) 메서드 등록
 
-		self.publisher.subscribe("DATA_LOADED",self.on_event_data_loaded)
+		self.publisher.subscribe("DATA_LOADED",self.on_event_datas_loaded)
 		self.publisher.subscribe("ROW_CHANGED",self.render_bscan)
 		self.publisher.subscribe("SELECTION_CHANGED", self.update_ascan_plots)
 		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
@@ -442,7 +442,7 @@ class UltrasoundSignalViewer:
 	# Subscriber Callbacks (이벤트 반응 함수들)
 	# Event Driven Subscriber Callbacks (이벤트 반응 함수들)
 	
-	def on_event_data_loaded(self) :
+	def on_event_datas_loaded(self) :
 
 		#'DATA_LOADED' 이벤트 수신 시 수행 : open_csvs(self) 의 일부를 대체
 		
@@ -513,8 +513,10 @@ class UltrasoundSignalViewer:
 	
 	def on_phase_inv_toggle(self):
 		"""Blue 오버레이 토글 시"""
+		#UI 클래스 내부 처리이기 떄문에 손 안 댐:구독 패턴(Publisher-Subscriber)은 시스템 전체가 공유해야 하는 '핵심 데이터 상태'가 바뀔 때 사용하는 것이 가장 좋습니다.
 		self.render_bscan()
-		self.update_ui()
+		#self.update_ui()
+		self.update_ascan_plots()
 	
 
 	def open_csvs(self) -> None:
@@ -699,7 +701,7 @@ class UltrasoundSignalViewer:
 		#동적 필터 범위 표기 적용
 		low_str = f"{self.config.filter_lowcut_MHz:.1f}"
 		high_str = f"{self.config.filter_highcut_MHz:.1f}"
-		ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz',variable=self.view_mode_var,value='filtered',command =self.update_ui).grid(row=0, column=7, padx=5, pady=2, sticky="w")
+		ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz',variable=self.view_mode_var,value='filtered',command =self.update_ascan_plots).grid(row=0, column=7, padx=5, pady=2, sticky="w")
 		ttk.Radiobutton(control_frame, text='Raw Data',variable=self.view_mode_var,value='raw',command=self.update_ui).grid(row=1, column=7, padx=5, pady=2, sticky="w")
 
 		#Sperator 3
@@ -783,7 +785,7 @@ class UltrasoundSignalViewer:
 	def update_loaded_label(self) : 
 		if not self.data.file_paths or self.current_row_idx >= len(self.data.file_paths) : 
 			return
-		filename = os.path.basename(self.data.file_paths[self.current_row_idx])
+		filename = os.path.basename(self.data.file_paths[self.data.active_row])
 		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
 
 						
