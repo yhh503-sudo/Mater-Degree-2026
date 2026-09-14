@@ -39,7 +39,7 @@ class DataEventPublisher :
 		'''등록된 구독자들에게 이벤트 발생 통보'''
 		if _event_type_in in self._subscribers : 
 			for _callback in self._subscribers[_event_type_in] :
-					_callback()
+					_callback() # 리스트 0번부터 순차적으로 실행
 
 
 
@@ -426,16 +426,143 @@ class UltrasoundSignalViewer:
 
 		self.create_widgets()
 		#구독 패턴 등록
-		self.register_event_subscriptions(self)
+		self.register_event_subscriptions()
+
+	# --------------------------------------------------------------------------
+    # UI 생성 루틴
+    # --------------------------------------------------------------------------
+
+
+	def create_widgets(self) : 
+
+		#Control Panel Main Frame
+		control_frame = ttk.LabelFrame(self.window,text = 'Control Panel', padding =6)
+		control_frame.pack(side=tk.TOP, fill = tk.X, padx=10, pady =5)
+
+		# 1. Open Button (2행 높이 통합)
+		btn_open = ttk.Button(control_frame, text = 'Open CSVs', command = self.open_csvs)
+		btn_open.grid(row=0,column=0,padx=(0,5),pady=2)
+
+		# 2. Status Labels (위: 전체 크기 / 아래: 현재 선택 파일명)
+
+		self.lbl_shape_info = ttk.Label(control_frame,text='0 Rows * 0 Cols', font=("Arial", 12, "bold"), foreground="#2e7d32")
+		self.lbl_shape_info.grid(row=0, column=1, padx=10, pady=2, sticky="w")
+
+		self.lbl_loaded_info = ttk.Label(control_frame, text="No files loaded", font=("Arial", 10), foreground="#4caf50")
+		self.lbl_loaded_info.grid(row=1, column=1, padx=10, pady=2, sticky="w")
+
+		#Sperator 1
+		ttk.Separator(control_frame, orient='vertical').grid(row=0, column=2, rowspan=2, sticky="ns", padx=10)
+
+		#3. Spinboxes
+		ttk.Label(control_frame, text= 'Row Index ', font=("Segoe UI", 11, "bold")).grid(row=0, column=3, padx=2, pady=2)
+		self.spin_row = ttk.Spinbox(control_frame, from_=0, to=0, width=5, command = self.on_row_change)
+		self.spin_row.grid(row=0, column=4, padx=5, pady=2)
+		self.spin_row.bind('<Return>', lambda e: self.on_row_change())
+
+		ttk.Label(control_frame,text='Col Index').grid(row=1,column=3,padx=2, pady=2, sticky="e")
+		self.spin_col = ttk.Spinbox(control_frame,from_=0,to=0,width=5,command=self.on_col_change)
+		self.spin_col.grid(row=1, column=4, padx=5, pady=2)
+		self.spin_col.bind('<Return>', lambda e : self.on_col_change())
+
+		#Sperator 2
+		ttk.Separator(control_frame, orient='vertical').grid(row=0,column=5,rowspan=2, sticky="ns", padx=10)
+
+		#4. BandPas Radio
+		ttk.Label(control_frame, text = 'BandPass', font=("Arial", 10, "bold")).grid(row=0, column=6, rowspan=2, padx=5)
+		#동적 필터 범위 표기 적용
+		low_str = f"{self.config.filter_lowcut_MHz:.1f}"
+		high_str = f"{self.config.filter_highcut_MHz:.1f}"
+		ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz',variable=self.view_mode_var,value='filtered',command =self.update_ascan_plots).grid(row=0, column=7, padx=5, pady=2, sticky="w")
+		ttk.Radiobutton(control_frame, text='Raw Data',variable=self.view_mode_var,value='raw',command=self.update_ascan_plots).grid(row=1, column=7, padx=5, pady=2, sticky="w")
+
+		#Sperator 3
+		ttk.Separator(control_frame,orient='vertical').grid(row=0, column= 8, rowspan=2, sticky="ns", padx=10)
+		
+
+		#Align method Frame
+		ttk.Label(control_frame,text='Align Method:',font=("Segoe UI", 9, "bold")).grid(row=0, column=9, padx=(0, 5), pady=2)
+		ttk.Radiobutton(control_frame, text='Evelope Peak',variable = self.align_method_var, value='envelope_peak',command=self.on_align_change).grid(row=0, column=10, padx=3, pady=2, sticky='w')
+		ttk.Radiobutton(control_frame, text ='Cross corr',variable = self.align_method_var, value='cross_corr',command=self.on_align_change).grid(row=1, column=10, padx=3, pady=2, sticky='w')
+		#라디오 버튼을 클릭하는 순간 "cross_corr"라는 문자열이 self.align_method_var에 즉시 저장 / 그 다음. command=self.on_align_change: 버튼을 클릭해 값이 바뀌었을 때 실행할 콜백 함수
+
+		#Sperator 4
+		ttk.Separator(control_frame, orient="vertical").grid(row=0, column = 11, rowspan=2, sticky="ns", padx=10)
+
+		#Phase Inverse Control Group
+		ttk.Label(control_frame, text = 'Phase Inverse :', font=("Segoe UI", 9, "bold")).grid(row=0, column=12, padx=(0, 5), pady=2)
+		ttk.Radiobutton(control_frame,text="Blue Apply", variable=self.phase_inverse_var, value = "blue_apply", command =self.on_phase_inv_toggle).grid(row=0,column=13,padx=3,pady=2,sticky='w')
+		ttk.Radiobutton(control_frame,text="No Apply",variable=self.phase_inverse_var,value="no_apply",command=self.on_phase_inv_toggle).grid(row=1,column=13,padx=3,pady=2,sticky='w')
+
+				
+		#Main Plot Layout
+		plot_frame = ttk.Frame(self.window)
+		plot_frame.pack(side=tk.TOP, fill=tk.BOTH,expand=True,padx=10,pady=5)
+
+		self.fig = matplotlib.figure.Figure(figsize=(12,6), dpi=100)
+		gs = GridSpec(3,2,figure=self.fig,width_ratios=[1,1.2])
+
+		self.ax_roi = self.fig.add_subplot(gs[0,0])
+		self.ax_whole = self.fig.add_subplot(gs[1,0])
+		self.ax_fft = self.fig.add_subplot(gs[2,0])
+		self.ax_bscan = self.fig.add_subplot(gs[:,1])
+
+		self.setup_plots()
+
+		self.canvas = FigureCanvasTkAgg(self.fig, master = plot_frame)
+		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
+		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
+
+		toolbar = NavigationToolbar2Tk(self.canvas,plot_frame)
+		toolbar.update()
+
+
+	
+	def setup_plots(self) : #플롯 세부 설정 위임 : 중간에 초기화들에 사용
+	
+		#ROX Axis
+		self.ax_roi.set_title("ROI Align Signal", fontsize=9, fontweight='bold')
+		self.ax_roi.grid(True, linestyle='--', alpha=0.5)
+		self.line_roi_sig_for_A = self.ax_roi.plot([], [], color='#1f77b4', lw=1.0, label='Signal')[0]
+		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', lw=1.0, ls='--', label='Envelope')[0]
+		self.ax_roi.legend(loc='upper right', fontsize = 7)
+		self.ax_roi.set_ylim(-32768,32768)
+	
+		#Whole AScan AXis
+		self.ax_whole.set_title('Raw Ascan', fontsize=9, fontweight='bold')
+		self.ax_whole.grid(True, linestyle='--', alpha=0.5)
+		self.line_whole_sig = self.ax_whole.plot([], [], color='#1f77b4', lw=0.8)[0]
+		self.line_whole_env = self.ax_whole.plot([], [], color='#ff7f0e', lw=1.0, ls='--')[0]
+		self.line_align_mark = self.ax_whole.axvline(x=0, color='red', ls=':', lw=1)
+		self.line_inv_mark = self.ax_whole.axvline(x=0, color='purple', ls=':', lw=1, visible=False)
+		self.ax_whole.set_ylim(-32768,32768)
+	
+		#FFT Axis
+		self.ax_fft.set_title("Raw FFT : Peak",fontsize=9, fontweight='bold')
+		self.ax_fft.grid(True, linestyle='--', alpha=0.5)
+		self.line_fft = self.ax_fft.plot([], [], color='#d62728', lw=1.0)[0]
+		self.line_fft_peak = self.ax_fft.axvline(x=0, color='green', ls='--', lw=1)
+	
+		#B Scan Axis
+		self.ax_bscan.set_title("B SCAN", fontsize=11, fontweight='bold')
+		self.ax_bscan.set_ylabel("Depth Samples")
+		self.ax_bscan.set_xlabel("Column")
+		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00', lw=1.5, visible=False)
+	
+		self.fig.tight_layout()
+
 
 	def register_event_subscriptions(self) :
 
 		# 구독(Subscribe) 등록: 특정 이벤트 시 내 UI 업데이트 메서드들을 연결!
         # ----------------------------------------------------------------------
 		# 이벤트 발행 시, 실행될 UI 콜백(Observer) 메서드 등록
-
 		self.publisher.subscribe("DATA_LOADED",self.on_event_datas_loaded)
+
+		# 2. Row 변경 시 실행 (B-Scan 갱신 + 라벨 갱신)
+		self.publisher.subscribe("ROW_CHANGED", self.update_loaded_label)
 		self.publisher.subscribe("ROW_CHANGED",self.render_bscan)
+
 		self.publisher.subscribe("SELECTION_CHANGED", self.update_ascan_plots)
 		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
 
@@ -492,8 +619,13 @@ class UltrasoundSignalViewer:
 			# UI가 직접 랜더링하는 것이 아니라 Engine의 위치를 바꾸면,
 			# Engine이 알고리즘 판단 후 ROW_CHANGED / SELECTION_CHANGED 이벤트를 던집니다.
 			self.engine.set_active_selection(r,c)
-			self.update_loaded_label()
-		except ValueError : 
+			#self.update_loaded_label()
+		except : 
+			raise ValueError("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
+			r = self.data.active_row
+			c = self.data.active_col
+			self.engine.set_active_selection(r,c)
+			#self.update_loaded_label()
 			pass
 	
 	def on_col_change(self) -> None :
@@ -503,7 +635,11 @@ class UltrasoundSignalViewer:
 			r = int(self.spin_row.get())
 			c = int(self.spin_col.get())
 			self.engine.set_active_selection(r,c) 
-		except ValueError:
+		except :
+			raise ValueError("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
+			r = self.data.active_row
+			c = self.data.active_col
+			self.engine.set_active_selection(r,c) 
 			pass
 
 	def on_align_change(self) : 
@@ -511,11 +647,12 @@ class UltrasoundSignalViewer:
 		self.engine.set_align_method(self.align_method_var.get())
 
 	
-	def on_phase_inv_toggle(self):
+	def on_phase_inv_toggle(self) :
 		"""Blue 오버레이 토글 시"""
+		#self.bscan_img_display : Optional[matplotlib.AxesImage] 바꾸는 것에 지나지 않음
 		#UI 클래스 내부 처리이기 떄문에 손 안 댐:구독 패턴(Publisher-Subscriber)은 시스템 전체가 공유해야 하는 '핵심 데이터 상태'가 바뀔 때 사용하는 것이 가장 좋습니다.
+		#"시스템의 데이터 상태(Model/Engine State)가 바뀌는 핵심 이벤트만 Publisher를 타고, 화면 표현을 위한 단순 렌더링 옵션(View State)은 View 내부에서 가볍게 처리한다
 		self.render_bscan()
-		#self.update_ui()
 		self.update_ascan_plots()
 	
 
@@ -656,134 +793,9 @@ class UltrasoundSignalViewer:
 								#여러 번 호출되어도 마지막 1번만 그려집니다
 			
 
-	# --------------------------------------------------------------------------
-    # UI 생성 루틴
-    # --------------------------------------------------------------------------
-
-
-	def create_widgets(self) : 
-
-		#Control Panel Main Frame
-		control_frame = ttk.LabelFrame(self.window,text = 'Control Panel', padding =6)
-		control_frame.pack(side=tk.TOP, fill = tk.X, padx=10, pady =5)
-
-		# 1. Open Button (2행 높이 통합)
-		btn_open = ttk.Button(control_frame, text = 'Open CSVs', command = self.open_csvs)
-		btn_open.grid(row=0,column=0,padx=(0,5),pady=2)
-
-		# 2. Status Labels (위: 전체 크기 / 아래: 현재 선택 파일명)
-
-		self.lbl_shape_info = ttk.Label(control_frame,text='0 Rows * 0 Cols', font=("Arial", 12, "bold"), foreground="#2e7d32")
-		self.lbl_shape_info.grid(row=0, column=1, padx=10, pady=2, sticky="w")
-
-		self.lbl_loaded_info = ttk.Label(control_frame, text="No files loaded", font=("Arial", 10), foreground="#4caf50")
-		self.lbl_loaded_info.grid(row=1, column=1, padx=10, pady=2, sticky="w")
-
-		#Sperator 1
-		ttk.Separator(control_frame, orient='vertical').grid(row=0, column=2, rowspan=2, sticky="ns", padx=10)
-
-		#3. Spinboxes
-		ttk.Label(control_frame, text= 'Row Index ', font=("Segoe UI", 11, "bold")).grid(row=0, column=3, padx=2, pady=2)
-		self.spin_row = ttk.Spinbox(control_frame, from_=0, to=0, width=5, command = self.on_row_change)
-		self.spin_row.grid(row=0, column=4, padx=5, pady=2)
-		self.spin_row.bind('<Return>', lambda e: self.on_row_change())
-
-		ttk.Label(control_frame,text='Col Index').grid(row=1,column=3,padx=2, pady=2, sticky="e")
-		self.spin_col = ttk.Spinbox(control_frame,from_=0,to=0,width=5,command=self.on_col_change)
-		self.spin_col.grid(row=1, column=4, padx=5, pady=2)
-		self.spin_col.bind('<Return>', lambda e : self.on_col_change())
-
-		#Sperator 2
-		ttk.Separator(control_frame, orient='vertical').grid(row=0,column=5,rowspan=2, sticky="ns", padx=10)
-
-		#4. BandPas Radio
-		ttk.Label(control_frame, text = 'BandPass', font=("Arial", 10, "bold")).grid(row=0, column=6, rowspan=2, padx=5)
-		#동적 필터 범위 표기 적용
-		low_str = f"{self.config.filter_lowcut_MHz:.1f}"
-		high_str = f"{self.config.filter_highcut_MHz:.1f}"
-		ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz',variable=self.view_mode_var,value='filtered',command =self.update_ascan_plots).grid(row=0, column=7, padx=5, pady=2, sticky="w")
-		ttk.Radiobutton(control_frame, text='Raw Data',variable=self.view_mode_var,value='raw',command=self.update_ui).grid(row=1, column=7, padx=5, pady=2, sticky="w")
-
-		#Sperator 3
-		ttk.Separator(control_frame,orient='vertical').grid(row=0, column= 8, rowspan=2, sticky="ns", padx=10)
-		
-
-		#Align method Frame
-		ttk.Label(control_frame,text='Align Method:',font=("Segoe UI", 9, "bold")).grid(row=0, column=9, padx=(0, 5), pady=2)
-		ttk.Radiobutton(control_frame, text='Evelope Peak',variable = self.align_method_var, value='envelope_peak',command=self.on_align_change).grid(row=0, column=10, padx=3, pady=2, sticky='w')
-		ttk.Radiobutton(control_frame, text ='Cross corr',variable = self.align_method_var, value='cross_corr',command=self.on_align_change).grid(row=1, column=10, padx=3, pady=2, sticky='w')
-		#라디오 버튼을 클릭하는 순간 "cross_corr"라는 문자열이 self.align_method_var에 즉시 저장 / 그 다음. command=self.on_align_change: 버튼을 클릭해 값이 바뀌었을 때 실행할 콜백 함수
-
-		#Sperator 4
-		ttk.Separator(control_frame, orient="vertical").grid(row=0, column = 11, rowspan=2, sticky="ns", padx=10)
-
-		#Phase Inverse Control Group
-		ttk.Label(control_frame, text = 'Phase Inverse :', font=("Segoe UI", 9, "bold")).grid(row=0, column=12, padx=(0, 5), pady=2)
-		ttk.Radiobutton(control_frame,text="Blue Apply", variable=self.phase_inverse_var, value = "blue_apply", command =self.on_phase_inv_toggle).grid(row=0,column=13,padx=3,pady=2,sticky='w')
-		ttk.Radiobutton(control_frame,text="No Apply",variable=self.phase_inverse_var,value="no_apply",command=self.on_phase_inv_toggle).grid(row=1,column=13,padx=3,pady=2,sticky='w')
-
-				
-		#Main Plot Layout
-		plot_frame = ttk.Frame(self.window)
-		plot_frame.pack(side=tk.TOP, fill=tk.BOTH,expand=True,padx=10,pady=5)
-
-		self.fig = matplotlib.figure.Figure(figsize=(12,6), dpi=100)
-		gs = GridSpec(3,2,figure=self.fig,width_ratios=[1,1.2])
-
-		self.ax_roi = self.fig.add_subplot(gs[0,0])
-		self.ax_whole = self.fig.add_subplot(gs[1,0])
-		self.ax_fft = self.fig.add_subplot(gs[2,0])
-		self.ax_bscan = self.fig.add_subplot(gs[:,1])
-
-		self.setup_plots()
-
-		self.canvas = FigureCanvasTkAgg(self.fig, master = plot_frame)
-		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
-		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
-
-		toolbar = NavigationToolbar2Tk(self.canvas,plot_frame)
-		toolbar.update()
-
-
-	
-	def setup_plots(self) : #플롯 세부 설정 위임 : 중간에 초기화들에 사용
-	
-		#ROX Axis
-		self.ax_roi.set_title("ROI Align Signal", fontsize=9, fontweight='bold')
-		self.ax_roi.grid(True, linestyle='--', alpha=0.5)
-		self.line_roi_sig_for_A = self.ax_roi.plot([], [], color='#1f77b4', lw=1.0, label='Signal')[0]
-		self.line_roi_env = self.ax_roi.plot([], [], color='#ff7f0e', lw=1.0, ls='--', label='Envelope')[0]
-		self.ax_roi.legend(loc='upper right', fontsize = 7)
-		self.ax_roi.set_ylim(-32768,32768)
-	
-		#Whole AScan AXis
-		self.ax_whole.set_title('Raw Ascan', fontsize=9, fontweight='bold')
-		self.ax_whole.grid(True, linestyle='--', alpha=0.5)
-		self.line_whole_sig = self.ax_whole.plot([], [], color='#1f77b4', lw=0.8)[0]
-		self.line_whole_env = self.ax_whole.plot([], [], color='#ff7f0e', lw=1.0, ls='--')[0]
-		self.line_align_mark = self.ax_whole.axvline(x=0, color='red', ls=':', lw=1)
-		self.line_inv_mark = self.ax_whole.axvline(x=0, color='purple', ls=':', lw=1, visible=False)
-		self.ax_whole.set_ylim(-32768,32768)
-	
-		#FFT Axis
-		self.ax_fft.set_title("Raw FFT : Peak",fontsize=9, fontweight='bold')
-		self.ax_fft.grid(True, linestyle='--', alpha=0.5)
-		self.line_fft = self.ax_fft.plot([], [], color='#d62728', lw=1.0)[0]
-		self.line_fft_peak = self.ax_fft.axvline(x=0, color='green', ls='--', lw=1)
-	
-		#B Scan Axis
-		self.ax_bscan.set_title("B SCAN", fontsize=11, fontweight='bold')
-		self.ax_bscan.set_ylabel("Depth Samples")
-		self.ax_bscan.set_xlabel("Column")
-		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00', lw=1.5, visible=False)
-	
-		self.fig.tight_layout()
-
-
-
 	
 	def update_loaded_label(self) : 
-		if not self.data.file_paths or self.current_row_idx >= len(self.data.file_paths) : 
+		if not self.data.file_paths or self.data.active_row >= len(self.data.file_paths) : 
 			return
 		filename = os.path.basename(self.data.file_paths[self.data.active_row])
 		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
@@ -793,13 +805,9 @@ class UltrasoundSignalViewer:
 		#ctrl + 마우스 이동 시 쓰트롤링 업데이트
 		if event.inaxes == self.ax_bscan and event.key == 'control' :
 			if event.xdata is not None :
-
 				_col = int(round(event.xdata))
-
 				if 0 <= _col < self.data.num_cols :
-
 					current_time = time.time()
-
 					if current_time - self.last_ascan_update_time > 0.1 :
 
 						self.last_ascan_update_time = current_time
