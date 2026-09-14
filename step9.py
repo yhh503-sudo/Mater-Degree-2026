@@ -107,7 +107,7 @@ class UltrasoundCubeData :
 	num_cols : int = 0
 	num_samples : int = 0
 
-	#현재 선택 상태 (Publisher - Subscriber 패턴)
+	#현재 선택 상태 : 오직 여기에서만 참조하게 함.
 	active_row : int = 0  #self.data라는 하나의 데이터 객체 메모리에만 존재
 	active_col : int = 0
 
@@ -324,9 +324,9 @@ class UltrasoundProcessorEngine:
 		gain_dB = depth_offset * self.data.config.tgc_slope_dB
 		tgc_gain = (10.0 ** (gain_dB / 20.0)).astype(np.float32)
 
-		# In-place 곱셈 연산으로 메모리 효율 유지
-		roi_signal_cube *= tgc_gain
-		return roi_signal_cube
+		# 연산시마다, 증폭을 막기 위해서 변경
+		# roi_signal_cube *= tgc_gain
+		return roi_signal_cube * tgc_gain
 
 
 	def convert_to_8bit_log(self, roi_signal_cube: np.ndarray) -> np.ndarray:
@@ -413,6 +413,7 @@ class UltrasoundSignalViewer:
 
 		# self.current_row_idx = 0
 		# self.current_col_idx = 0
+
 		self.view_mode_var = tk.StringVar(value = 'raw')
 		self.align_method_var = tk.StringVar(value = self.config.align_method)
 
@@ -423,6 +424,7 @@ class UltrasoundSignalViewer:
 
 		self.phase_inverse_var =tk.StringVar(value='no_apply') 	#Phase Inverse 토글 기본값
 		self.bscan_2d_gray : Optional[np.ndarray] = None 		# 1채널 흑백 버퍼 캐시
+		self._bscan_rgb_cache : Optional[np.ndarray] = None # UI 렌더링 전용 픽셀 버퍼 캐시 (Model 데이터가 아닌 View 전용)
 
 		self.create_widgets()
 		#구독 패턴 등록
@@ -621,7 +623,7 @@ class UltrasoundSignalViewer:
 			self.engine.set_active_selection(r,c)
 			#self.update_loaded_label()
 		except : 
-			raise ValueError("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
+			print("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
 			r = self.data.active_row
 			c = self.data.active_col
 			self.engine.set_active_selection(r,c)
@@ -636,7 +638,7 @@ class UltrasoundSignalViewer:
 			c = int(self.spin_col.get())
 			self.engine.set_active_selection(r,c) 
 		except :
-			raise ValueError("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
+			print("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
 			r = self.data.active_row
 			c = self.data.active_col
 			self.engine.set_active_selection(r,c) 
@@ -681,19 +683,31 @@ class UltrasoundSignalViewer:
 		r = self.data.active_row
 		self.bscan_2d_gray = self.data.roi_cube_8bit_for_B[r].T #전치
 		h, w = self.bscan_2d_gray.shape
+
+		#1. 뷰어 규격 변경 시에만 메모리 재할당
+		if (self._bscan_rgb_cache is None) or(self._bscan_rgb_cache.shape != (h,w,3)):
+			self._bscan_rgb_cache = np.empty((h,w,3),dtype = np.uint8)
+
+		#2. 캐시 버퍼에 흑백 채널 복사
+		self._bscan_rgb_cache [:,:,0] = self.bscan_2d_gray
+		self._bscan_rgb_cache [:,:,1] = self.bscan_2d_gray
+		self._bscan_rgb_cache [:,:,2] = self.bscan_2d_gray
+
 	
 		pre = self.config.align_pre_samples
 		post = self.config.align_post_samples
 		extent = [0, w-1, post, -pre]
 
+
 		#2. Phase Inverser 토글 조건 분기 (메모리 재할당 최소화)
 		cond1 = self.phase_inverse_var.get() == "blue_apply"
 		cond2 = self.data.phase_inv_map is not None
 		is_blue_apply = cond1 and cond2
+
+		display_data : Optional[np.ndarray] = None
 	
 		if is_blue_apply :
 			# RGB 3채널 배열 생성 (오버레이 적용 시에만 동적 할당)
-			display_data = np.stack([self.bscan_2d_gray] * 3, axis = -1)
 			self.engine.update_active_align_map_pointer()
 			active_align_map = self.data.active_align_map
 	
@@ -704,23 +718,23 @@ class UltrasoundSignalViewer:
 					align_abs_idx = active_align_map[r, c]
 					rel_idx = inv_abs_idx - align_abs_idx + pre #이래야 ROI(-100,500)에 맞음
 					if 0 <= rel_idx < h : #제외 : ROI 표시 시작점(align_abs_idx - pre)보다 더 앞쪽에 찍힌 경우
-						display_data[rel_idx,c] = [0,0,255] #파란색 마킹
+						self._bscan_rgb_cache[rel_idx,c] = [0,0,255] #파란색 마킹
 		else:
-			#no apply 상태일 떄는 원본 2d grey 버퍼를 그대로 참조 (메모리 복사 없음)
-			display_data = self.bscan_2d_gray
-
+			#no apply 상태일 떄는 원본 2d grey 버퍼를 그대로 참조 (메모리 복사 이미함)
+			pass
 
 		#3. AxesImage 갱신 및 캔버스 동기화	
 		# 이미지 객체 재사용 (Image Object Reuse)
 		if self.bscan_img_display is not None:
-			self.bscan_img_display.set_data(display_data) #data 교체 끼우기
+			self.bscan_img_display.set_data(self._bscan_rgb_cache) #data 교체 끼우기
 			self.bscan_img_display.set_extent(extent)
 	
 		else: #처음 딱 한번 글일 떄 시행됨
 			self.bscan_img_display = self.ax_bscan.imshow( #객체 생성
-				display_data, 
-				cmap = 'gray' if display_data.ndim == 2 else None,
-				aspect = 'auto', origin = 'upper', extent = extent
+				self._bscan_rgb_cache, 
+				aspect = 'auto', 
+				origin = 'upper', 
+				extent = extent
 			)
 			self.line_bscan_cursor.set_visible(True)
 
@@ -812,11 +826,10 @@ class UltrasoundSignalViewer:
 
 						self.last_ascan_update_time = current_time
 
-						#UI스핀 박스를 직접 고치는 것이 아니라, Engine을 통과시킵니다
-						#self.current_col_idx = _col
+						# UI 스핀박스 텍스트 신속 갱신
 						self.spin_col.delete(0, tk.END)
 						self.spin_col.insert(0, str(_col)) #스핀박스도 바뀜. 그러나, on_col_change()이벤트는 미발생
-						#self.update_ui()
+						# Engine 연산 호출 (이벤트 체인 발동)
 						self.engine.set_active_selection(self.data.active_row,_col)
 
 	def run(self) :
