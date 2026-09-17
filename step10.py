@@ -84,6 +84,7 @@ class ExperimentConfig :
 	phase_inv_roi_ratio : float = 1.0 # ROI 내 Max Peak 대비 비율
 	phase_inv_whole_pos_ratio : float = 0.15 # 전체 신호 Pos Peak 대비 비율
 
+	# C-Scan 설정 default 값
 	cscan_gate_start: int = 1
 	cscan_gate_end: int = 180
 	cscan_stretch_mode: str = 'absolute' # "absolute" or "relative_std"
@@ -102,7 +103,7 @@ class ExperimentConfig :
 #1. C-Layer DataClass
 @dataclass
 class CLayer :
-	data_8bit : np.ndarray
+	data_8bit_2d_map : np.ndarray
 	depth_start : int
 	depth_end : int
 	gate_mode : str = 'max_peak'
@@ -128,6 +129,8 @@ class UltrasoundCubeData :
 	raw_3d_cube : Optional[np.ndarray] =				None  # int16
 	filtered_3d_cube: Optional[np.ndarray] = 			None  # float32
 	env_3d_cube: Optional[np.ndarray] = 				None  # float32
+
+	## B-Scan 및 C-Scan 공통 재료 8-bit Log 3D Cube
 	roi_3d_cube_8bit_for_B: Optional[np.ndarray] = 	None  # uint8
 	roi_3d_cube_float_for_A: Optional[np.ndarray] = 	None  # float32
 	roi_3d_env_cube_float_for_A: Optional[np.ndarray] =None  # float32
@@ -135,7 +138,6 @@ class UltrasoundCubeData :
 	#3D FFT Magnitude Cubes
 	raw_fft_mag_3d_cube: Optional[np.ndarray] = None      # float32
 	filtered_fft_3d_cube: Optional[np.ndarray] = None     # float32
-
 
 	#2D Maps
 	align_map_envelope_peak: Optional[np.ndarray] = None   # int
@@ -275,18 +277,56 @@ class UltrasoundProcessorEngine:
 		pass #단일 C-Scan 생성 로직 확장 가능 구간
 
 
-	def apply_histogram_stretch(self, cscan_2d : np.ndarray, mode : str = 'absoulte', abs_range : Tuple[int,int] = (10,245), n_std : float = 2.0) ->np.ndarray :
+
+	def extract_cscan_layer(self, depth_start : int, depth_end : int, gate_mode : str = 'max') -> CLayer :
+
+		if self.data.roi_3d_cube_8bit_for_B is None :
+			raise ValueError("B-Scan Data Cube(uoint8)가 준비되지 않았습니다")
+
+		s_idx = max(0, depth_start + self.data.config.align_pre_samples)
+		e_idx = min(self.data.roi_3d_cube_8bit_for_B.shape[-1], depth_end + self.data.config.align_pre_samples)
+
+		gate_data = self.data.roi_3d_cube_8bit_for_B[:, :, s_idx : e_idx]
+
+		if gate_data.shape[-1] == 0:
+			cscan_2d = np.zeros((self.data.num_rows, self.data.num_cols), dtype=np.uint8)
+		elif gate_mode == "max" :
+			cscan_2d = np.max(gate_data, axis = -1).astype(np.uint8)
+		elif gate_mode == "mean" :
+			cscan_2d = np.mean(gate_data, axis = -1).astype(np.uint8)
+		else : 
+			cscan_2d =  np.mean(gate_data, axis = -1).astype(np.uint8)
+
+		return CLayer(data_8bit_2d_map=cscan_2d, depth_start= depth_start, depth_end= depth_end, gate_mode = gate_mode)
+	
+
+	def apply_histogram_stretch(self, 
+							 cscan_2d : np.ndarray, 
+							 mode : str = 'absoulte', 
+							 abs_range : Tuple[int,int] = (10,245), 
+							 n_std : float = 2.0) ->np.ndarray :
 
 		img_float = cscan_2d.astype(np.float32)
 
 		if mode == 'absolute' :
 			min_val, max_val = abs_range
 		elif mode == 'relative_std' :
-			maen_v = np.mean(img_float)
+			mean_v = np.mean(img_float)
 			std_v = np.std(img_float)
 			min_val = max(0.0, mean_v - n_std * std_v)
+			max_val = min(255.0, mean_v + n_std * std_v)
+		else :
+			min_val, max_val = abs_range
 
-				
+		if max_val <= min_val : 
+			max_val = min_val + 1.0
+
+		stretched = (img_float - min_val) / (max_val - min_val) * 255.0
+		return np.clip(stretched, 0, 255).astype(np.uint8)
+
+
+
+
 	def set_align_method(self, method_in : str) -> None :
 		#Align 방식 변경 처리
 		self.data.config.align_method = method_in
