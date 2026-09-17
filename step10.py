@@ -276,7 +276,15 @@ class UltrasoundProcessorEngine:
 
 
 	def apply_histogram_stretch(self, cscan_2d : np.ndarray, mode : str = 'absoulte', abs_range : Tuple[int,int] = (10,245), n_std : float = 2.0) ->np.ndarray :
+
 		img_float = cscan_2d.astype(np.float32)
+
+		if mode == 'absolute' :
+			min_val, max_val = abs_range
+		elif mode == 'relative_std' :
+			maen_v = np.mean(img_float)
+			std_v = np.std(img_float)
+			min_val = max(0.0, mean_v - n_std * std_v)
 
 				
 	def set_align_method(self, method_in : str) -> None :
