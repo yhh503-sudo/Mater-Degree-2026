@@ -106,7 +106,7 @@ class CLayer :
 	data_8bit_2d_map : np.ndarray
 	depth_start : int
 	depth_end : int
-	gate_mode : str = 'max_peak'
+	gate_mode : str = 'max'
 	slice_index : int = 0
 
 
@@ -133,7 +133,7 @@ class UltrasoundCubeData :
 	## B-Scan 및 C-Scan 공통 재료 8-bit Log 3D Cube
 	roi_3d_cube_8bit_for_B: Optional[np.ndarray] = 	None  # uint8
 	roi_3d_cube_float_for_A: Optional[np.ndarray] = 	None  # float32
-	roi_3d_env_cube_float_for_A: Optional[np.ndarray] =None  # float32
+	roi_3d_env_cube_float_for_A: Optional[np.ndarray] = None  # float32
 
 	#3D FFT Magnitude Cubes
 	raw_fft_mag_3d_cube: Optional[np.ndarray] = None      # float32
@@ -216,7 +216,6 @@ class UltrasoundProcessorEngine:
 				self.data.ref_template = None
 
 
-
 	def process_cube_pipeline(self) -> None :
 		if self.data.raw_3d_cube is None:
 			raise ValueError("Raw cube가 할당되지 않았습니다.")
@@ -235,8 +234,8 @@ class UltrasoundProcessorEngine:
 		self.compute_align_maps()
 
 		#5. roi cube : a, b 스캔 만듦
-		self.update_roi_cube_A_B()
-		self.generate_single_cscan(self.data.config.cscan_gate_start,self.data.config.cscan_gate_end)
+		self.update_roi_cube_A_B_C()
+		#self.generate_single_cscan(self.data.config.cscan_gate_start,self.data.config.cscan_gate_end)
 
 
 
@@ -258,7 +257,6 @@ class UltrasoundProcessorEngine:
 		#특정 좌표 $(Row, Col)$ 위치의 단일 A-Scan 신호(1D 파형), Spectrum(FFT), 그리고 B-Scan 영상 위의 초록색 커서 선 위치를 이동
 
 
-
 	def set_cscan_parameters(self, d_start :int, d_end : int, stretch_mode : str, merge_mode : str) -> None:
 		self.data.config.cscan_gate_start = d_start
 		self.data.config.cscan_gate_end = d_end
@@ -271,12 +269,16 @@ class UltrasoundProcessorEngine:
 
 	def generate_single_cscan(self, d_start: int, d_end: int) -> None : 
 		layer = self.extract_csacn_layer(d_start,d_end,gate_mode = self.data.config.cscan_merge_mode)
-		stretched_map = self.apply_histogram_stretch(layer.data_8bit,mode = self.data.config.cscan_stretch_mode)
+		stretched_map = self.apply_histogram_stretch(layer.data_8bit_2d_map,mode = self.data.config.cscan_stretch_mode)
 		self.data.active_cscan_map = stretched_map
 		self.publisher.notify("CSCAN_UPDATED")
 		pass #단일 C-Scan 생성 로직 확장 가능 구간
 
-
+	def get_bscan_2d_map(self, row_idx: int) -> np.ndarray:
+		if self.data.roi_3d_cube_8bit_for_B is None:
+			raise ValueError("B-Scan Data Cube가 준비되지 않았습니다.")
+		r = max(0, min(row_idx, self.data.num_rows - 1))
+		return self.data.roi_3d_cube_8bit_for_B[r].T
 
 	def extract_cscan_layer(self, depth_start : int, depth_end : int, gate_mode : str = 'max') -> CLayer :
 
@@ -297,14 +299,14 @@ class UltrasoundProcessorEngine:
 		else : 
 			cscan_2d =  np.mean(gate_data, axis = -1).astype(np.uint8)
 
-		return CLayer(data_8bit_2d_map=cscan_2d, depth_start= depth_start, depth_end= depth_end, gate_mode = gate_mode)
+		return CLayer(data_8bit_2d_map = cscan_2d, depth_start = depth_start, depth_end = depth_end, gate_mode = gate_mode)
 	
 
 	def apply_histogram_stretch(self, 
 							 cscan_2d : np.ndarray, 
 							 mode : str = 'absoulte', 
-							 abs_range : Tuple[int,int] = (10,245), 
-							 n_std : float = 2.0) ->np.ndarray :
+							 abs_range : Tuple[int,int] = (10, 245), 
+							 n_std : float = 2.0) -> np.ndarray :
 
 		img_float = cscan_2d.astype(np.float32)
 
@@ -444,8 +446,8 @@ class UltrasoundProcessorEngine:
 		return _data_8bit
 
 	
-	def update_roi_cube_A_B(self) -> None :
-
+	def update_roi_cube_A_B_C(self) -> None :
+		"""A-Scan, B-Scan, C-Scan 데이터 파이프라인 통합 재구성 메서드"""
 		pre : int = self.data.config.align_pre_samples
 		post : int = self.data.config.align_post_samples
 		roi_len : int = pre + post
@@ -485,7 +487,10 @@ class UltrasoundProcessorEngine:
 		self.data.roi_3d_env_cube_float_for_A = self.extract_envelope(self.data.roi_3d_cube_float_for_A)
 
 		# 3. B-Scan용 8-bit Log 3D CUBE 생성
-		self.data.roi_3d_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_env_3d_cube_float_for_A)
+		self.data.roi_3d_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_env_3d_cube_float_for_B)
+
+		# 4. Align 재정렬에 맞춰 C-Scan 맵도 자동 재계산
+		self.generate_single_cscan(self.data.config.cscan_gate_start, self.data.config.cscan_gate_end)
 
 # ==========================================
 # 3. GUI Processor (Tkinter Interface) : Subscriber / Event-Driven View
@@ -510,6 +515,7 @@ class UltrasoundSignalViewer:
 		self.view_mode_var = tk.StringVar(value = 'raw')
 		self.align_method_var = tk.StringVar(value = self.config.align_method)
 
+
 		#step6 :  최적화 & Phase Inverse 변수 정의
 		self.bscan_img_display : Optional[matplotlib.AxesImage] = None # 화면 패널 레이어 AxesImage 객체
 		self.line_bscan_cursor : Optional[Line2D] = None 	# B-Scan 커서
@@ -518,6 +524,14 @@ class UltrasoundSignalViewer:
 		self.phase_inverse_var =tk.StringVar(value='no_apply') 	#Phase Inverse 토글 기본값
 		self.bscan_2d_gray : Optional[np.ndarray] = None 		# 1채널 흑백 버퍼 캐시
 		self._bscan_rgb_cache : Optional[np.ndarray] = None # UI 렌더링 전용 픽셀 버퍼 캐시 (Model 데이터가 아닌 View 전용)
+
+		self.cscan_merge_var = tk.StringVar(value=self.config.cscan_merge_mode)
+		self.cscan_stretch_var = tk.StringVar(value=self.config.cscan_stretch_mode)
+
+		self.cscan_img_display: Optional[matplotlib.image.AxesImage] = None
+		self.line_cscan_horiz: Optional[Line2D] = None
+		self.line_cscan_vert: Optional[Line2D] = None
+		self.last_ascan_update_time = 0.0
 
 		self.create_widgets()
 		#구독 패턴 등록
@@ -589,25 +603,60 @@ class UltrasoundSignalViewer:
 		ttk.Radiobutton(control_frame,text="Blue Apply", variable=self.phase_inverse_var, value = "blue_apply", command =self.on_phase_inv_toggle).grid(row=0,column=13,padx=3,pady=2,sticky='w')
 		ttk.Radiobutton(control_frame,text="No Apply",variable=self.phase_inverse_var,value="no_apply",command=self.on_phase_inv_toggle).grid(row=1,column=13,padx=3,pady=2,sticky='w')
 
+		#Sperator 5
+		ttk.Separator(control_frame, orient="vertical").grid(row=0, column=13, rowspan=2, sticky="ns", padx=8)
+
+		# 5. C-Scan Depth Settings
+		ttk.Label(control_frame, text='Depth start', font=("Segoe UI", 9, "bold")).grid(row=0, column=14, padx=2, pady=2, sticky="e")
+		self.spin_depth_start = ttk.Spinbox(control_frame, from_=-100, to=500, width=5, command=self.on_cscan_setting_change)
+		self.spin_depth_start.grid(row=0, column=15, padx=3, pady=2)
+		self.spin_depth_start.delete(0, tk.END); self.spin_depth_start.insert(0, str(self.config.cscan_gate_start))
+		self.spin_depth_start.bind('<Return>', lambda e: self.on_cscan_setting_change())
+
+		ttk.Label(control_frame, text='Depth end', font=("Segoe UI", 9, "bold")).grid(row=1, column=14, padx=2, pady=2, sticky="e")
+		self.spin_depth_end = ttk.Spinbox(control_frame, from_=-100, to=500, width=5, command=self.on_cscan_setting_change)
+		self.spin_depth_end.grid(row=1, column=15, padx=3, pady=2)
+		self.spin_depth_end.delete(0, tk.END); self.spin_depth_end.insert(0, str(self.config.cscan_gate_end))
+		self.spin_depth_end.bind('<Return>', lambda e: self.on_cscan_setting_change())
+
+		ttk.Separator(control_frame, orient="vertical").grid(row=0, column=16, rowspan=2, sticky="ns", padx=8)
+
+		# 6. Merge Options
+		ttk.Label(control_frame, text='Merge', font=("Segoe UI", 9, "bold")).grid(row=0, column=17, rowspan=2, padx=2)
+		ttk.Radiobutton(control_frame, text='Max', variable=self.cscan_merge_var, value='max', command=self.on_cscan_setting_change).grid(row=0, column=18, padx=2, pady=2, sticky='w')
+		ttk.Radiobutton(control_frame, text='Mean', variable=self.cscan_merge_var, value='mean', command=self.on_cscan_setting_change).grid(row=1, column=18, padx=2, pady=2, sticky='w')
+
+		ttk.Separator(control_frame, orient="vertical").grid(row=0, column=19, rowspan=2, sticky="ns", padx=8)
+
+		# 7. Stretch Options
+		ttk.Label(control_frame, text='Stretch', font=("Segoe UI", 9, "bold")).grid(row=0, column=20, rowspan=2, padx=2)
+		ttk.Radiobutton(control_frame, text='Abs', variable=self.cscan_stretch_var, value='absolute', command=self.on_cscan_setting_change).grid(row=0, column=21, padx=2, pady=2, sticky='w')
+		ttk.Radiobutton(control_frame, text='Relative', variable=self.cscan_stretch_var, value='relative_std', command=self.on_cscan_setting_change).grid(row=1, column=21, padx=2, pady=2, sticky='w')
+
 				
 		#Main Plot Layout
 		plot_frame = ttk.Frame(self.window)
 		plot_frame.pack(side=tk.TOP, fill=tk.BOTH,expand=True,padx=10,pady=5)
 
-		self.fig = matplotlib.figure.Figure(figsize=(12,6), dpi=100)
+		self.fig = matplotlib.figure.Figure(figsize=(13, 7), dpi=100)
 		gs = GridSpec(3,2,figure=self.fig,width_ratios=[1,1.2])
 
 		self.ax_roi = self.fig.add_subplot(gs[0,0])
 		self.ax_whole = self.fig.add_subplot(gs[1,0])
 		self.ax_fft = self.fig.add_subplot(gs[2,0])
-		self.ax_bscan = self.fig.add_subplot(gs[:,1])
+
+		self.ax_bscan = self.fig.add_subplot(gs[0:1, 1])
+		self.ax_cscan = self.fig.add_subplot(gs[1:3, 1])
 
 		self.setup_plots()
 
 		self.canvas = FigureCanvasTkAgg(self.fig, master = plot_frame)
 		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
-		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
 
+		# 인터랙션 연동
+		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
+		self.canvas.mpl_connect('button_press_event', self.on_cscan_click)
+		
 		toolbar = NavigationToolbar2Tk(self.canvas,plot_frame)
 		toolbar.update()
 
@@ -641,9 +690,13 @@ class UltrasoundSignalViewer:
 		#B Scan Axis
 		self.ax_bscan.set_title("B SCAN", fontsize=11, fontweight='bold')
 		self.ax_bscan.set_ylabel("Depth Samples")
-		self.ax_bscan.set_xlabel("Column")
+		#self.ax_bscan.set_xlabel("Column")
 		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00', lw=1.5, visible=False)
-	
+
+		self.ax_cscan.set_title("C-SCAN", fontsize=11, fontweight='bold')
+		self.line_cscan_horiz = self.ax_cscan.axhline(y=0, color='#00ff00', lw=1.0, visible=False)
+		self.line_cscan_vert = self.ax_cscan.axvline(x=0, color='#00ff00', lw=1.0, visible=False)
+
 		self.fig.tight_layout()
 
 
@@ -660,6 +713,9 @@ class UltrasoundSignalViewer:
 
 		self.publisher.subscribe("SELECTION_CHANGED", self.update_ascan_plots)
 		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
+
+		self.publisher.subscribe("CSCAN_UPDATED", self.render_cscan)
+		self.publisher.subscribe("CSCAN_SETTINGS_CHANGED", self.on_event_cscan_settings_changed)
 
 	# Subscriber Callbacks (이벤트 반응 함수들)
 	# Event Driven Subscriber Callbacks (이벤트 반응 함수들)
@@ -691,18 +747,36 @@ class UltrasoundSignalViewer:
 		self.line_roi_env.set_xdata(roi_x)
 
 		self.render_bscan()
+		self.render_cscan()
 		self.update_ascan_plots()
 
 	def on_event_roi_updated(self):
 
 		#'ROI_UPDATED' 이벤트 수신시 수행
 		self.render_bscan()
+		self.render_cscan()
 		self.update_ascan_plots()
-	
+
+	def on_cscan_setting_change(self) -> None :
+		try:
+			d_start = int(self.spin_depth_start.get())
+			d_end = int(self.spin_depth_end.get())
+		except ValueError:
+			d_start = self.config.cscan_gate_start
+			d_end = self.config.cscan_gate_end
+
+		merge_mode = self.cscan_merge_var.get()
+		stretch_mode = self.cscan_stretch_var.get()
+
+		self.engine.set_cscan_parameters(d_start, d_end, merge_mode, stretch_mode)
+		self.publisher.notify("CSCAN_SETTINGS_CHANGED")
 #
 # UI 이벤트 핸들러 : 사용자 입력 -> Engine 으로 전달하는 통로
 #
 
+
+	def on_event_cscan_settings_changed(self) -> None :
+		self.render_cscan()
 
 	def on_row_change(self) -> None : 
 		# UI 이벤트 핸들러 (사용자 입력 -> Engine으로 전달하는 통로)
@@ -778,7 +852,7 @@ class UltrasoundSignalViewer:
 		h, w = self.bscan_2d_gray.shape
 
 		#1. 뷰어 규격 변경 시에만 메모리 재할당
-		if (self._bscan_rgb_cache is None) or(self._bscan_rgb_cache.shape != (h,w,3)):
+		if (self._bscan_rgb_cache is None) or (self._bscan_rgb_cache.shape != (h,w,3)) :
 			self._bscan_rgb_cache = np.empty((h,w,3),dtype = np.uint8)
 
 		#2. 캐시 버퍼에 흑백 채널 복사
@@ -831,9 +905,6 @@ class UltrasoundSignalViewer:
 			)
 			self.line_bscan_cursor.set_visible(True)
 
-		#굳이 이것을?
-		#self.canvas.draw_idle()			
-
 
 
 	def update_ascan_plots(self) -> None :  #전체 plot들 업데이트
@@ -847,6 +918,15 @@ class UltrasoundSignalViewer:
 		
 		r,c = self.data.active_row, self.data.active_col
 		mode = self.view_mode_var.get()
+
+		#"메모리의 r 값과 화면 Spinbox의 글자가 다르면 화면 글자도 r로 바꿔라"라는 UI 동기화 작업
+		if str(r) != self.spin_row.get():
+			self.spin_row.delete(0, tk.END)
+			self.spin_row.insert(0, str(r))
+		if str(c) != self.spin_col.get():
+			self.spin_col.delete(0, tk.END)
+			self.spin_col.insert(0, str(c))
+
 	
 		if mode == 'raw' : 
 			sig = self.data.raw_cube[r,c]
@@ -890,11 +970,15 @@ class UltrasoundSignalViewer:
 		#3. ROI Signal(Y축만 교체)
 		if self.data.roi_cube_float_for_A is not None : 	
 			self.line_roi_sig_for_A.set_ydata(self.data.roi_cube_float_for_A[r,c])
-			self.line_roi_env.set_ydata(self.data.roi_env_cube_float_for_A[r,c])
-				
+
+		if self.data.roi_3d_env_cube_float_for_B is not None:
+			self.line_roi_env.set_ydata(self.data.roi_3d_env_cube_float_for_B[r, c])
 		
 		#B-Scan Cursor 위치 갱신 : c에 의해, 실시간 바뀜
 		self.line_bscan_cursor.set_xdata([c,c])
+		self.line_cscan_horiz.set_ydata([r, r])
+		self.line_cscan_vert.set_xdata([c, c])
+
 
 		self.canvas.draw_idle()#CPU가 Idle(한가한) 상태가 되거나, 이벤트 루프가 돌아올 때 그려집니다.
 								#여러 번 호출되어도 마지막 1번만 그려집니다
@@ -906,6 +990,33 @@ class UltrasoundSignalViewer:
 			return
 		filename = os.path.basename(self.data.file_paths[self.data.active_row])
 		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
+
+	def on_mouse_hover(self, event_in) : 
+		if event_in.key != 'control' :
+			return
+
+		current_time = time.time()
+		if current_time - self.last_ascan_update_time < 0.05 :
+			return
+		if event_in.inaxes == self.ax_bscan and event_in.xdata is not None :
+			_col = int(round(event_in.xdata))
+			if 0 <= _col < self.data.num_cols :
+				self.last_ascan_update_time = current_time
+				self.engine.set_active_selection(self.data.active_row, _col)
+
+			elif event_in.inaxes == self.ax_cscan and event_in.xdata is not None and event_in.ydata is not None :
+				_col = int(round(event_in.xdata))
+				_row = int(round(event_in.ydata))
+
+				if 0<= _row < self.data.num_rows and 0 <= _col < self.data.num_cols :
+					self.last_ascan_update_time = current_time
+					self.engine.set_active_selection(_row,_col)
+
+	def on_csan_click(self, event_in) :
+		if event_in.inaxes == self.ax_cscan and event_in.xdata is not None and event_in.ydata is not None:
+			_col = int(round(event_in.xdata))
+			_row = int(round(event_in.ydata))
+			self.engine.set_active_selection(_row, _col)
 
 						
 	def on_bscan_hover(self,event) : 
