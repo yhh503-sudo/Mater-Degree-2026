@@ -1,0 +1,42 @@
+digraph Architecture {
+	compound=true nodesep=0.6 rankdir=TB ranksep=0.8 spline=polyline
+	node [fontname="Malgun Gothic" penwidth=2 shape=box style="filled,rounded"]
+	edge [fontname="Malgun Gothic" fontsize=10 penwidth=1.5]
+	subgraph cluster_view {
+		color="#b0bec5" fillcolor="#f0f4f8" fontcolor="#212121" fontname="Malgun Gothic" fontsize=16 label="View [UI Layer (Subscriber)]" penwidth=2 style="filled,rounded"
+		Spinbox [label="Row Spinbox
+(Input Event)" color="#263238" fillcolor="#ffffff" height=0.9 width=2.2]
+		BScan [label="B-Scan Plot
+(Render Engine)" color="#0288d1" fillcolor="#e1f5fe" height=0.9 width=2.2]
+		AScan [label="A-Scan Plot
+(Render Engine)" color="#0288d1" fillcolor="#e1f5fe" height=0.9 width=2.2]
+	}
+	subgraph cluster_control {
+		color="#b0bec5" fillcolor="#f0f4f8" fontcolor="#212121" fontname="Malgun Gothic" fontsize=16 label="Control [Control Layer]" penwidth=2 style="filled,rounded"
+		Engine [label="UltrasoundProcessorEngine
+- Validates Input
+- Updates State & Slice Data" color="#f57c00" fillcolor="#ffe0b2" height=1.0 width=3.5]
+		Publisher [label="DataEventPublisher
+- Manages Event Subscribers
+- Notifies Views" color="#388e3c" fillcolor="#c8e6c9" height=1.0 width=3.5]
+	}
+	subgraph cluster_model {
+		color="#b0bec5" fillcolor="#f0f4f8" fontcolor="#212121" fontname="Malgun Gothic" fontsize=16 label="Model [Model Layer]" penwidth=2 style="filled,rounded"
+		AppState [label="AppState Class
+- Dynamic Status Storage
+- active_row / active_col / configs" color="#fbc02d" fillcolor="#fff9c4" height=1.0 width=3.8]
+		CubeData [label="UltrasoundCubeData Class
+- Invariable Mass Data Storage
+- 3D Volumes (Raw / Filtered)" color="#e65100" fillcolor="#ffcc80" height=1.0 width=3.8]
+	}
+	Spinbox -> Engine [label=" 1. User Input
+ (Row Change: 10 -> 11)" color="#212121"]
+	Engine -> AppState [label=" 2. Value Validation
+ State Update" color="#d32f2f" penwidth=2]
+	Engine -> CubeData [label=" 3. Up-to-date State (Row 11)
+ ~> Pure Data Refer (Slicing)" color="#e65100" penwidth=2 style=dashed]
+	Engine -> Publisher [label=" 4. Calculation ~>
+ Event Publish (notify)" color="#388e3c" penwidth=2]
+	Publisher -> BScan [label=" 5. CallBack Functions work" color="#0288d1"]
+	Publisher -> AScan [label=" 5. CallBack Functions work" color="#0288d1"]
+}
