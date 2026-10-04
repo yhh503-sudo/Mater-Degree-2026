@@ -257,7 +257,7 @@ class UltrasoundProcessorEngine:
 		#특정 좌표 $(Row, Col)$ 위치의 단일 A-Scan 신호(1D 파형), Spectrum(FFT), 그리고 B-Scan 영상 위의 초록색 커서 선 위치를 이동
 
 
-	def set_cscan_parameters(self, d_start :int, d_end : int, stretch_mode : str, merge_mode : str) -> None:
+	def set_cscan_parameters(self, d_start : int, d_end : int, stretch_mode : str, merge_mode : str) -> None:
 		self.state.cscan_gate_start = d_start
 		self.state.cscan_gate_end = d_end
 		self.state.cscan_stretch_mode = stretch_mode
@@ -272,6 +272,7 @@ class UltrasoundProcessorEngine:
 		_stretched_map = self.apply_histogram_stretch(layer.data_8bit_2d_map, mode = self.state.cscan_stretch_mode)
 		self.data.active_cscan_map = _stretched_map
 		self.publisher.notify("CSCAN_UPDATED")
+		#Q. CSCAN UPDATED 노티파이 후에, CSCAN PARAMTERS UPDATED 노티파이가 맞는 건가?  중복되는 게 아닌가?
 		pass #단일 C-Scan 생성 로직 확장 가능 구간
 
 
@@ -560,6 +561,8 @@ class UltrasoundSignalViewer:
 
 	def create_widgets(self) : 
 
+		#Q. 왜 컴포넌트들이 Col이 1개씩 밀렸죠? 제가 수정해서, 옳게 바꿨습니다.
+
 		#Control Panel Main Frame
 		control_frame = ttk.LabelFrame(self.window,text = 'Control Panel', padding =6)
 		control_frame.pack(side=tk.TOP, fill = tk.X, padx=10, pady =5)
@@ -671,7 +674,9 @@ class UltrasoundSignalViewer:
 
 		# 인터랙션 연동
 		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
-		self.canvas.mpl_connect('button_press_event', self.on_cscan_click) #이게 왜 on_cscan으로 연결되지?  b-scan이 아니고?
+		self.canvas.mpl_connect('button_press_event', self.on_cscan_click) 
+		#Q.이게 왜 on_cscan으로 연결되지?  b-scan이 아니고?
+		#B-SCAN 호버 처럼, C-SCAN 호버를 하자.
 		
 		toolbar = NavigationToolbar2Tk(self.canvas,plot_frame)
 		toolbar.update()
@@ -735,9 +740,10 @@ class UltrasoundSignalViewer:
 
 	# Event Driven Subscriber Callbacks (이벤트 반응 함수들)	
 	def on_event_datas_loaded(self) :
+		
 		#'DATA_LOADED' 이벤트 수신 시 수행 : open_csvs(self) 의 일부를 대체
-		self.spin_row.config(from_=0, to=self.data.num_rows -1)
-		self.spin_col.config(from_=0, to=self.data.num_cols - 1)
+		self.spin_row.config(from_=0, to = self.data.num_rows -1)
+		self.spin_col.config(from_=0, to = self.data.num_cols - 1)
 
 		self.spin_row.delete(0, tk.END); self.spin_row.insert(0, "0")
 		self.spin_col.delete(0, tk.END); self.spin_col.insert(0, "0")
@@ -752,10 +758,10 @@ class UltrasoundSignalViewer:
 		self.line_fft.set_xdata(self.data.shared_fft_freqs_MHz)#데이터 자체는 0Hz부터 나이퀴스트 주파수(Sampling Rate의 절반, 예: 500MHz)까지
 		self.ax_fft.set_xlim(self.config.filter_lowcut_MHz, self.config.filter_highcut_MHz)#set_xlim()에 의해 Matplotlib의 화면 출력 범위(시야)만 밴드패스 필터 구간으로 잘라서 보여
 				
-		roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
+		_roi_x = np.arange(-self.config.align_pre_samples, self.config.align_post_samples)
 		self.ax_roi.set_xlim(-self.config.align_pre_samples, self.config.align_post_samples)
-		self.line_roi_sig_for_A.set_xdata(roi_x)
-		self.line_roi_env.set_xdata(roi_x)
+		self.line_roi_sig_for_A.set_xdata(_roi_x)
+		self.line_roi_env.set_xdata(_roi_x)
 
 		self.render_bscan()
 		self.render_cscan()
@@ -773,21 +779,6 @@ class UltrasoundSignalViewer:
 		self.render_cscan()
 
 	#UI Handlers
-	def on_cscan_setting_change(self) -> None : 
-		try : 
-			d_start = int(self.spin_depth_start.get())
-			d_end = int(self.spin_depth_end.get())
-		except ValueError :
-			print(f"C-Scan Depth 설정값들이 spinbox들에 잘못 입력되었습니다")
-			d_start =  self.state.cscan_gate_start
-			d_end = self.state.cscan_gate_end
-		
-		merge_mode = self.cscan_merge_var.get()
-		stretch_mode = self.cscan_stretch_var.get()
-
-		self.engine.set_cscan_parameters(d_start, d_end, stretch_mode, merge_mode)
-		self.publisher.notify("CSCAN_SETTINGS_CHANGED")
-
 	def on_cscan_setting_change(self) -> None :
 		#사용자가 화면의 Spinbox나 Checkbox 값을 변경했을 때 UI(View)가 직접 호출하는 핸들러입니다.
 		try:
@@ -949,7 +940,8 @@ class UltrasoundSignalViewer:
 
 		if self.cscan_img_display is not None :
 			self.cscan_img_display.set_data (self.data.active_cscan_map)
-		else :#없으면 생성
+		else :
+			# 없으면 생성, 처음에만 실행됨
 			self.cscan_img_display = self.ax_cscan.imshow(
 				self.data.active_cscan_map,
 				cmap='gray',
@@ -1042,8 +1034,8 @@ class UltrasoundSignalViewer:
 		if not self.data.file_paths or self.data.active_row >= len(self.data.file_paths) : 
 			print(f"아직 읽은 csv파일들이 없거나, 설정한 값이 가능 row 범위를 넘어갔습니다.")
 			return
-		filename = os.path.basename(self.data.file_paths[self.data.active_row])
-		self.lbl_loaded_info.config(text = f"{filename} Loaded", foreground="green")
+		_filename = os.path.basename(self.data.file_paths[self.data.active_row])
+		self.lbl_loaded_info.config(text = f"{_filename} Loaded", foreground="green")
 
 	def on_mouse_hover(self, event_in) : 
 		if event_in.key != 'control' :
