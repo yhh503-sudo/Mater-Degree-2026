@@ -455,6 +455,7 @@ class UltrasoundSignalViewer:
         self.lbl_loaded_info = ttk.Label(control_frame, text="No files loaded", font=("Arial", 10), foreground="#4caf50")
         self.lbl_loaded_info.grid(row=1, column=1, padx=10, pady=2, sticky="w")
 
+		#1구분자
         ttk.Separator(control_frame, orient='vertical').grid(row=0, column=2, rowspan=2, sticky="ns", padx=10)
 
         # Spinboxes
@@ -468,6 +469,7 @@ class UltrasoundSignalViewer:
         self.spin_col.grid(row=1, column=4, padx=5, pady=2)
         self.spin_col.bind('<Return>', lambda e: self.on_col_change())
 
+		#2구분자
         ttk.Separator(control_frame, orient='vertical').grid(row=0, column=5, rowspan=2, sticky="ns", padx=10)
 
         # BandPass Radio
@@ -477,6 +479,7 @@ class UltrasoundSignalViewer:
         ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz', variable=self.view_mode_var, value='filtered', command=self.update_ascan_plots).grid(row=0, column=7, padx=5, pady=2, sticky="w")
         ttk.Radiobutton(control_frame, text='Raw Data', variable=self.view_mode_var, value='raw', command=self.update_ascan_plots).grid(row=1, column=7, padx=5, pady=2, sticky="w")
 
+		#3구분자
         ttk.Separator(control_frame, orient='vertical').grid(row=0, column=8, rowspan=2, sticky="ns", padx=10)
         
         # Align method Frame
@@ -484,6 +487,7 @@ class UltrasoundSignalViewer:
         ttk.Radiobutton(control_frame, text='Envelope Peak', variable=self.align_method_var, value='envelope_peak', command=self.on_align_change).grid(row=0, column=10, padx=3, pady=2, sticky='w')
         ttk.Radiobutton(control_frame, text='Cross corr', variable=self.align_method_var, value='cross_corr', command=self.on_align_change).grid(row=1, column=10, padx=3, pady=2, sticky='w')
 
+		#4구분자
         ttk.Separator(control_frame, orient="vertical").grid(row=0, column=11, rowspan=2, sticky="ns", padx=10)
 
         # Phase Inverse Control Group
@@ -491,32 +495,35 @@ class UltrasoundSignalViewer:
         ttk.Radiobutton(control_frame, text="Blue Apply", variable=self.phase_inverse_var, value="blue_apply", command=self.on_phase_inv_toggle).grid(row=0, column=13, padx=3, pady=2, sticky='w')
         ttk.Radiobutton(control_frame, text="No Apply", variable=self.phase_inverse_var, value="no_apply", command=self.on_phase_inv_toggle).grid(row=1, column=13, padx=3, pady=2, sticky='w')
 
-        ttk.Separator(control_frame, orient="vertical").grid(row=0, column=13, rowspan=2, sticky="ns", padx=8)
+		#5구분자
+        ttk.Separator(control_frame, orient="vertical").grid(row=0, column=14, rowspan=2, sticky="ns", padx=8)
 
         # C-Scan Depth Settings
-        ttk.Label(control_frame, text='Depth start', font=("Segoe UI", 9, "bold")).grid(row=0, column=14, padx=2, pady=2, sticky="e")
+        ttk.Label(control_frame, text='Depth start', font=("Segoe UI", 9, "bold")).grid(row=0, column=15, padx=2, pady=2, sticky="e")
         self.spin_depth_start = ttk.Spinbox(control_frame, from_=-100, to=500, width=5, command=self.on_cscan_setting_change)
-        self.spin_depth_start.grid(row=0, column=15, padx=3, pady=2)
+        self.spin_depth_start.grid(row=0, column=16, padx=3, pady=2)
         self.spin_depth_start.delete(0, tk.END); self.spin_depth_start.insert(0, str(self.state.cscan_gate_start))
         self.spin_depth_start.bind('<Return>', lambda e: self.on_cscan_setting_change())
 
-        ttk.Label(control_frame, text='Depth end', font=("Segoe UI", 9, "bold")).grid(row=1, column=14, padx=2, pady=2, sticky="e")
+        ttk.Label(control_frame, text='Depth end', font=("Segoe UI", 9, "bold")).grid(row=1, column=15, padx=2, pady=2, sticky="e")
         self.spin_depth_end = ttk.Spinbox(control_frame, from_=-100, to=500, width=5, command=self.on_cscan_setting_change)
-        self.spin_depth_end.grid(row=1, column=15, padx=3, pady=2)
+        self.spin_depth_end.grid(row=1, column=16, padx=3, pady=2)
         self.spin_depth_end.delete(0, tk.END); self.spin_depth_end.insert(0, str(self.state.cscan_gate_end))
         self.spin_depth_end.bind('<Return>', lambda e: self.on_cscan_setting_change())
 
-        ttk.Separator(control_frame, orient="vertical").grid(row=0, column=16, rowspan=2, sticky="ns", padx=8)
+		#6구분자
+        ttk.Separator(control_frame, orient="vertical").grid(row=0, column=17, rowspan=2, sticky="ns", padx=8)
 
-        ttk.Label(control_frame, text='Merge', font=("Segoe UI", 9, "bold")).grid(row=0, column=17, rowspan=2, padx=2)
-        ttk.Radiobutton(control_frame, text='Max', variable=self.cscan_merge_var, value='max', command=self.on_cscan_setting_change).grid(row=0, column=18, padx=2, pady=2, sticky='w')
-        ttk.Radiobutton(control_frame, text='Mean', variable=self.cscan_merge_var, value='mean', command=self.on_cscan_setting_change).grid(row=1, column=18, padx=2, pady=2, sticky='w')
+        ttk.Label(control_frame, text='Merge', font=("Segoe UI", 9, "bold")).grid(row=0, column=18, rowspan=2, padx=2)
+        ttk.Radiobutton(control_frame, text='Max', variable=self.cscan_merge_var, value='max', command=self.on_cscan_setting_change).grid(row=0, column=19, padx=2, pady=2, sticky='w')
+        ttk.Radiobutton(control_frame, text='Mean', variable=self.cscan_merge_var, value='mean', command=self.on_cscan_setting_change).grid(row=1, column=19, padx=2, pady=2, sticky='w')
 
-        ttk.Separator(control_frame, orient="vertical").grid(row=0, column=19, rowspan=2, sticky="ns", padx=8)
+		#7구분자
+        ttk.Separator(control_frame, orient="vertical").grid(row=0, column=20, rowspan=2, sticky="ns", padx=8)
 
-        ttk.Label(control_frame, text='Stretch', font=("Segoe UI", 9, "bold")).grid(row=0, column=20, rowspan=2, padx=2)
-        ttk.Radiobutton(control_frame, text='Abs', variable=self.cscan_stretch_var, value='absolute', command=self.on_cscan_setting_change).grid(row=0, column=21, padx=2, pady=2, sticky='w')
-        ttk.Radiobutton(control_frame, text='Relative', variable=self.cscan_stretch_var, value='relative_std', command=self.on_cscan_setting_change).grid(row=1, column=21, padx=2, pady=2, sticky='w')
+        ttk.Label(control_frame, text='Stretch', font=("Segoe UI", 9, "bold")).grid(row=0, column=21, rowspan=2, padx=2)
+        ttk.Radiobutton(control_frame, text='Abs', variable=self.cscan_stretch_var, value='abs', command=self.on_cscan_setting_change).grid(row=0, column=22, padx=2, pady=2, sticky='w')
+        ttk.Radiobutton(control_frame, text='Relative', variable=self.cscan_stretch_var, value='relative', command=self.on_cscan_setting_change).grid(row=1, column=22, padx=2, pady=2, sticky='w')
 
         # Main Plot Layout
         plot_frame = ttk.Frame(self.window)
