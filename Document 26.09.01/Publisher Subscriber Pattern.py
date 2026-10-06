@@ -634,33 +634,54 @@ class UltrasoundSignalViewer:
             self.engine.load_files_to_cube(list(paths))
 
     # [수정 3] Ctrl + Hover 통합 이벤트 및 0.1초 쓰로틀링
-    def on_mouse_hover(self, event):
-        if not event.inaxes or event.key != 'control':
-            return
+	def on_mouse_hover(self, event):
+    if not event.inaxes or event.key != 'control':
+        return
 
-        current_time = time.time()
-        if current_time - self.last_ascan_update_time < 0.1:
-            return
+    current_time = time.time()
+    if current_time - self.last_ascan_update_time < 0.1:
+        return
 
-        if event.inaxes == self.ax_bscan and event.xdata is not None:
-            col = int(round(event.xdata))
-            if 0 <= col < self.data.num_cols:
+    # -------------------------------------------------------------
+    # 1. B-Scan 상에서 Ctrl + Hover 시 (col만 변경)
+    # -------------------------------------------------------------
+    if event.inaxes == self.ax_bscan and event.xdata is not None:
+        col = int(round(event.xdata))
+        if 0 <= col < self.data.num_cols:
+            # 실제 col 위치가 바뀌었을 때만 처리 (불필요한 무거운 연산 방지)
+            if self.state.active_col != col:
                 self.last_ascan_update_time = current_time
-                self.spin_col.delete(0, tk.END)
-                self.spin_col.insert(0, str(col))
+                
+                # Spinbox col 숫자 즉시 업데이트
+                if self.spin_col.get() != str(col):
+                    self.spin_col.delete(0, tk.END)
+                    self.spin_col.insert(0, str(col))
+                
+                # Engine 상태 업데이트 -> update_ascan_plots 연쇄 호출
                 self.engine.set_active_selection(self.state.active_row, col)
 
-        elif event.inaxes == self.ax_cscan and event.xdata is not None and event.ydata is not None:
-            col = int(round(event.xdata))
-            row = int(round(event.ydata))
-            if 0 <= row < self.data.num_rows and 0 <= col < self.data.num_cols:
+    # -------------------------------------------------------------
+    # 2. C-Scan 상에서 Ctrl + Hover 시 (row, col 모두 변경)
+    # -------------------------------------------------------------
+    elif event.inaxes == self.ax_cscan and event.xdata is not None and event.ydata is not None:
+        col = int(round(event.xdata))
+        row = int(round(event.ydata))
+        if 0 <= row < self.data.num_rows and 0 <= col < self.data.num_cols:
+            # row 또는 col 위치 중 하나라도 실제 바뀌었을 때만 처리
+            if self.state.active_row != row or self.state.active_col != col:
                 self.last_ascan_update_time = current_time
-                self.spin_row.delete(0, tk.END)
-                self.spin_row.insert(0, str(row))
-                self.spin_col.delete(0, tk.END)
-                self.spin_col.insert(0, str(col))
+                
+                # Spinbox row, col 숫자 즉시 업데이트
+                if self.spin_row.get() != str(row):
+                    self.spin_row.delete(0, tk.END)
+                    self.spin_row.insert(0, str(row))
+                if self.spin_col.get() != str(col):
+                    self.spin_col.delete(0, tk.END)
+                    self.spin_col.insert(0, str(col))
+                
+                # Engine 상태 업데이트 -> update_ascan_plots 연쇄 호출
                 self.engine.set_active_selection(row, col)
-
+				
     # Rendering
     def render_bscan(self): 
         if self.data.roi_3d_cube_8bit_for_B is None:
@@ -725,66 +746,85 @@ class UltrasoundSignalViewer:
             
         self.canvas.draw_idle()
 
-    def update_ascan_plots(self) -> None: 
-        if self.data.raw_3d_cube is None: 
-            return
-		
-        r, c = self.state.active_row, self.state.active_col
-        mode = self.view_mode_var.get()
 
-        if str(r) != self.spin_row.get():
-            self.spin_row.delete(0, tk.END)
-            self.spin_row.insert(0, str(r))
-        if str(c) != self.spin_col.get():
-            self.spin_col.delete(0, tk.END)
-            self.spin_col.insert(0, str(c))
+	def update_ascan_plots(self) -> None: 
+    if self.data.raw_3d_cube is None: 
+        return
+    
+    r, c = self.state.active_row, self.state.active_col
+    mode = self.view_mode_var.get()
 
-        if mode == 'raw': 
-            sig = self.data.raw_3d_cube[r, c]
-            env = self.data.env_3d_cube[r, c]
-            fft_mag = self.data.raw_fft_mag_3d_cube[r, c]
-        else:
-            sig = self.data.filtered_3d_cube[r, c]
-            env = self.data.env_3d_cube[r, c]
-            fft_mag = self.data.filtered_fft_mag_3d_cube[r, c]
+    # Spinbox 표시 값 상태 최종 동기화
+    if self.spin_row.get() != str(r):
+        self.spin_row.delete(0, tk.END)
+        self.spin_row.insert(0, str(r))
+    if self.spin_col.get() != str(c):
+        self.spin_col.delete(0, tk.END)
+        self.spin_col.insert(0, str(c))
 
-        self.line_whole_sig.set_ydata(sig)
-        self.line_whole_env.set_ydata(env)
-        
-        self.engine.update_active_align_map_pointer()
-        align_idx: int = self.data.active_align_map[r, c]
-        self.line_align_mark.set_xdata([align_idx, align_idx])
-        inv_idx = self.data.phase_inv_map[r, c]
-	
-        if inv_idx != -1:
-            self.line_inv_mark.set_xdata([inv_idx, inv_idx])
-            self.line_inv_mark.set_visible(True)
-            self.ax_roi.set_title(f"ROI Align : {align_idx}, Inverse : {inv_idx}", fontsize=9, fontweight='bold')
-        else: 
-            self.line_inv_mark.set_visible(False)
-            self.ax_roi.set_title(f"ROI Align : {align_idx}", fontsize=9, fontweight='bold')
+    # 모드에 따른 파형 데이터 선택
+    if mode == 'raw': 
+        sig = self.data.raw_3d_cube[r, c]
+        env = self.data.env_3d_cube[r, c]
+        fft_mag = self.data.raw_fft_mag_3d_cube[r, c]
+    else:
+        sig = self.data.filtered_3d_cube[r, c]
+        env = self.data.env_3d_cube[r, c]
+        fft_mag = self.data.filtered_fft_mag_3d_cube[r, c]
 
-        self.line_fft.set_ydata(fft_mag)
-        peak_freq_idx = np.argmax(fft_mag)
-        peak_freq_MHz = self.data.shared_fft_freqs_MHz[peak_freq_idx]
-        self.ax_fft.set_title(f"FFT: Peak={peak_freq_MHz:.1f}MHz", fontsize=9, fontweight='bold')
-        self.line_fft_peak.set_xdata([peak_freq_MHz, peak_freq_MHz])
-	
-        max_mag = np.max(fft_mag)
-        self.ax_fft.set_ylim(0, max_mag * 1.1 if max_mag > 0 else 1)
-	
-        if self.data.roi_3d_cube_float_for_A is not None: 	
-            self.line_roi_sig_for_A.set_ydata(self.data.roi_3d_cube_float_for_A[r, c])
+    # A-Scan 파형 및 FFT 그래프 데이터 갱신
+    self.line_whole_sig.set_ydata(sig)
+    self.line_whole_env.set_ydata(env)
+    
+    self.engine.update_active_align_map_pointer()
+    align_idx: int = self.data.active_align_map[r, c]
+    self.line_align_mark.set_xdata([align_idx, align_idx])
+    inv_idx = self.data.phase_inv_map[r, c]
 
-        if self.data.roi_3d_env_cube_float_for_B is not None:
-            self.line_roi_env.set_ydata(self.data.roi_3d_env_cube_float_for_B[r, c])
-		
+    if inv_idx != -1:
+        self.line_inv_mark.set_xdata([inv_idx, inv_idx])
+        self.line_inv_mark.set_visible(True)
+        self.ax_roi.set_title(f"ROI Align : {align_idx}, Inverse : {inv_idx}", fontsize=9, fontweight='bold')
+    else: 
+        self.line_inv_mark.set_visible(False)
+        self.ax_roi.set_title(f"ROI Align : {align_idx}", fontsize=9, fontweight='bold')
+
+    self.line_fft.set_ydata(fft_mag)
+    peak_freq_idx = np.argmax(fft_mag)
+    peak_freq_MHz = self.data.shared_fft_freqs_MHz[peak_freq_idx]
+    self.ax_fft.set_title(f"FFT: Peak={peak_freq_MHz:.1f}MHz", fontsize=9, fontweight='bold')
+    self.line_fft_peak.set_xdata([peak_freq_MHz, peak_freq_MHz])
+
+    max_mag = np.max(fft_mag)
+    self.ax_fft.set_ylim(0, max_mag * 1.1 if max_mag > 0 else 1)
+
+    if self.data.roi_3d_cube_float_for_A is not None: 	
+        self.line_roi_sig_for_A.set_ydata(self.data.roi_3d_cube_float_for_A[r, c])
+
+    if self.data.roi_3d_env_cube_float_for_B is not None:
+        self.line_roi_env.set_ydata(self.data.roi_3d_env_cube_float_for_B[r, c])
+
+    # =========================================================================
+    # [핵심] B-Scan 및 C-Scan 커서 위치 양방향 강제 동기화
+    # =========================================================================
+    # 1. B-Scan 세로 커서 라인 위치 업데이트 (c)
+    if hasattr(self, 'line_bscan_cursor') and self.line_bscan_cursor is not None:
         self.line_bscan_cursor.set_xdata([c, c])
+        self.line_bscan_cursor.set_visible(True)
+
+    # 2. C-Scan 십자 커서 위치 업데이트 (가로: r, 세로: c)
+    if hasattr(self, 'line_cscan_horiz') and self.line_cscan_horiz is not None:
         self.line_cscan_horiz.set_ydata([r, r])
+        self.line_cscan_horiz.set_visible(True)
+
+    if hasattr(self, 'line_cscan_vert') and self.line_cscan_vert is not None:
         self.line_cscan_vert.set_xdata([c, c])
+        self.line_cscan_vert.set_visible(True)
 
-        self.canvas.draw_idle()
-
+    # Canvas 전체 갱신 요청
+    self.canvas.draw_idle()
+	
+	
     def update_loaded_label(self): 
         if not self.data.file_paths or self.state.active_row >= len(self.data.file_paths): 
             return

@@ -54,7 +54,8 @@ class AppState:
 	#1. UI 활성 선택 상태
 	active_row : int = 0
 	active_col : int = 0
-	active_align_map : Optional[np.ndarray] = field(default=None, init=False)
+	active_align_map : Optional[np.ndarray] = field(default = None, init = False)
+	#Q. field  구문이 무엇을 뜻하죠? None과 무엇이 다르죠?
 
 	#2. 하드웨어 수집 환경
 	sampling_rate : float = 1e9 # 샘플링 속도 (1 GHz)
@@ -105,14 +106,14 @@ class CLayer :
 	depth_start : int
 	depth_end : int
 	gate_mode : str = 'max'
-	slice_index : int = 0 #여기에 대해선 의문
+	slice_index : int = 0 
+	#Q. Slice_index 보면 조금 이상한게, depth start-end로 충분한 거 아닌가요? 뭐죠?
 
 # [개선] 순수 데이터 컨테이너 (slots=True 메모리 최적화 유지)
 @dataclass(slots=True) 
 class UltrasoundCubeData:
 	
 	file_paths : List[str] = field(default_factory=list)
-
 	num_rows : int = 0
 	num_cols : int = 0
 	num_samples : int = 0
@@ -143,6 +144,7 @@ class UltrasoundCubeData:
 
 	#C-Scan 합성
 	c_layers : List[CLayer] = field(default_factory=list)
+	#Q. field 이 구문은 무엇인가?
 	active_cscan_map : Optional[np.ndarray] = None
 	
 	
@@ -152,14 +154,14 @@ class UltrasoundCubeData:
 # ==========================================
 
 class UltrasoundProcessorEngine:
-	def __init__(self, data :UltrasoundCubeData, publisher_in : DataEventPublisher) -> None :
+	def __init__(self, data_in :UltrasoundCubeData, publisher_in : DataEventPublisher) -> None :
 
-		self.data : UltrasoundCubeData = data
+		self.data : UltrasoundCubeData = data_in
 		#변경 : Engine이 가변 상태(State)를 소유하고 통제
 		self.state : AppState = AppState()
 		self.publisher : DataEventPublisher = publisher_in #주입
 
-	def load_files_to_cube(self, file_paths : List[str])->bool : 
+	def load_files_to_cube(self, file_paths : List[str]) -> bool : 
 		if not file_paths:
 			return False
 
@@ -253,7 +255,7 @@ class UltrasoundProcessorEngine:
 			self.publisher.notify("ROW_CHANGED") #ROW_CHANGED가 먼저 터져서 B-Scan 이미지를 새로 그린 뒤, SELECTION_CHANGED가 터져서 A-Scan과 커서를 맞춰 그려줍니다.
 
 		if _row_changed or _col_changed :
-			self.publisher.notify("SELECTION_CHANGED") #A-Scan Changed가 나을수도 
+			self.publisher.notify("SELECTED_ABEAM_CHANGED") 
 		#특정 좌표 $(Row, Col)$ 위치의 단일 A-Scan 신호(1D 파형), Spectrum(FFT), 그리고 B-Scan 영상 위의 초록색 커서 선 위치를 이동
 
 
@@ -294,7 +296,7 @@ class UltrasoundProcessorEngine:
 		gate_data = self.data.roi_3d_cube_8bit_for_B[:, :, s_idx : e_idx] #해당 Z들만 뽑았네.
 
 		if gate_data.shape[-1] == 0:
-			#무슨 예외처리네?
+			#Q.무슨 예외처리네? 없으면 생성한다는 것인가?
 			cscan_2d = np.zeros((self.data.num_rows, self.data.num_cols), dtype=np.uint8)
 		
 		elif gate_mode == "max" :
@@ -333,7 +335,7 @@ class UltrasoundProcessorEngine:
 
 		_std_diff = max_val - min_val
 		stretched = ((img_float - min_val) / (_std_diff)) * 255.0
-		#이러면, Relative에서 음수도 가능한데? 이걸 clip으로 커버침?
+		#Q.이러면, Relative에서 음수도 가능한데? 이걸 clip으로 커버쳐서, 0~255로 맞추는 것임?
 		return np.clip(stretched, 0, 255).astype(np.uint8)
 
 	def set_align_method(self, _method_in : str) -> None :
@@ -493,14 +495,11 @@ class UltrasoundProcessorEngine:
 		# 1. TGC 적용 후 Float 3D CUBE 저장				
 		self.data.roi_3d_cube_float_for_A = self.apply_tgc(roi_3d_signal_32bit_cube) #self.roi_cube_float_for_A는 TGC가 기본 적용임
 
-
 		# 2. 범용 extract_envelope 함수를 통해 ROI Envelope 3D 계산
 		self.data.roi_3d_env_cube_float_for_A = self.extract_envelope(self.data.roi_3d_cube_float_for_A)
 
-
 		# 3. B-Scan용 8-bit Log 3D CUBE 생성
 		self.data.roi_3d_cube_8bit_for_B = self.convert_to_8bit_log(self.data.roi_3d_env_cube_float_for_A)
-
 
 		# 4. Align 재정렬에 맞춰 C-Scan 맵도 자동 재계산
 		self.generate_single_cscan(self.state.cscan_gate_start, self.state.cscan_gate_end)
@@ -520,7 +519,8 @@ class UltrasoundSignalViewer:
 
 		#인프라 객체 생성 :  Publisher를 전체 시스템이 공유
 		self.publisher : DataEventPublisher = DataEventPublisher()
-		self.data : UltrasoundCubeData = UltrasoundCubeData()#config = self.config)
+		self.data : UltrasoundCubeData = UltrasoundCubeData()
+		#엔진안에, 이미 data가 들어있는거 아님? 주입성으로 넣은 것임?
 		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data, publisher_in=self.publisher)
 
 		self.view_mode_var = tk.StringVar(value = 'raw')
@@ -542,12 +542,13 @@ class UltrasoundSignalViewer:
 		self.cscan_img_display: Optional[matplotlib.image.AxesImage] = None
 		self.line_cscan_horiz: Optional[Line2D] = None
 		self.line_cscan_vert: Optional[Line2D] = None
+
+		# [수정 3] 쓰로틀링 시간 변수
 		self.last_ascan_update_time = 0.0
 
 		self.create_widgets()
 		#구독 패턴 등록
 		self.register_event_subscriptions()
-
 
 
 	@property
@@ -638,6 +639,7 @@ class UltrasoundSignalViewer:
 		self.spin_depth_end.delete(0, tk.END); self.spin_depth_end.insert(0, str(self.config.cscan_gate_end))
 		self.spin_depth_end.bind('<Return>', lambda e: self.on_cscan_setting_change())
 
+		#Sperator 6
 		ttk.Separator(control_frame, orient="vertical").grid(row=0, column=17, rowspan=2, sticky="ns", padx=8)
 
 		# 6. Merge Options
@@ -673,10 +675,7 @@ class UltrasoundSignalViewer:
 		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
 
 		# 인터랙션 연동
-		self.canvas.mpl_connect('motion_notify_event',self.on_bscan_hover)
-		self.canvas.mpl_connect('button_press_event', self.on_cscan_click) 
-		#Q.이게 왜 on_cscan으로 연결되지?  b-scan이 아니고?
-		#B-SCAN 호버 처럼, C-SCAN 호버를 하자.
+		self.canvas.mpl_connect('motion_notify_event',self.on_mouse_hover)
 		
 		toolbar = NavigationToolbar2Tk(self.canvas,plot_frame)
 		toolbar.update()
@@ -730,12 +729,12 @@ class UltrasoundSignalViewer:
 		self.publisher.subscribe("ROW_CHANGED", self.update_loaded_label)
 		self.publisher.subscribe("ROW_CHANGED", self.render_bscan)
 
-		self.publisher.subscribe("SELECTION_CHANGED", self.update_ascan_plots)
-		#Q. SELECTION_CHANGED 보다, "SELECTED_A-BEAM_CHANGED"가 더 맞는 표현 아닌가요?
+		self.publisher.subscribe("SELECTED_ABEAM_CHANGED", self.update_ascan_plots)
+		 # [수정 2] 명칭 변경 수신 등록
 		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
 
+		 # [수정 1] 중복 등록 제거, CSCAN_UPDATED 단일 등록
 		self.publisher.subscribe("CSCAN_UPDATED", self.render_cscan)
-		self.publisher.subscribe("CSCAN_SETTINGS_CHANGED", self.on_event_cscan_settings_changed)
 
 
 	# Event Driven Subscriber Callbacks (이벤트 반응 함수들)	
@@ -773,10 +772,10 @@ class UltrasoundSignalViewer:
 		self.render_bscan()
 		self.render_cscan()
 		self.update_ascan_plots() 
-		#Q. 이게 뒤에 존재해도 괜찮은가? Canvas DraW idle이 포함되어 있으니, 마지막에 실행되어야 할수 있음
 
-	def on_event_cscan_settings_changed(self) -> None:
-		self.render_cscan()
+
+	# def on_event_cscan_settings_changed(self) -> None:
+	# 	self.render_cscan()
 
 	#UI Handlers
 	def on_cscan_setting_change(self) -> None :
@@ -791,21 +790,23 @@ class UltrasoundSignalViewer:
 
 		_merge_mode = self.cscan_merge_var.get()
 		_stretch_mode = self.cscan_stretch_var.get()
-
 		self.engine.set_cscan_parameters(d_start, d_end, _merge_mode, _stretch_mode)
-		self.publisher.notify("CSCAN_SETTINGS_CHANGED")
+		
+		# Engine 내부에서 단일 CSCAN_UPDATED 발행
+		#self.publisher.notify("CSCAN_SETTINGS_CHANGED")
 
 #
 # UI 이벤트 핸들러 : 사용자 입력 -> Engine 으로 전달하는 통로
 #
 
-	def on_event_cscan_settings_changed(self) -> None :
-		#Publisher가 "CSCAN_SETTINGS_CHANGED" 이벤트를 방송(Notify)했을 때 실제 렌더링/화면 갱신을 수행하는 콜백(Callback) 함수입니다.
-		#반면, 지금처럼 분리해 두면 이벤트 발행(notify)은 단 1줄만 남고, 
-		# 각 UI 컴포넌트들이 각자 on_event_cscan_settings_changed() 같은 수신 콜백을 등록하기만
-		# 하면 되므로 코드가 매우 깨끗해집니다
-		self.render_cscan()
+	# def on_event_cscan_settings_changed(self) -> None :
+	# 	#Publisher가 "CSCAN_SETTINGS_CHANGED" 이벤트를 방송(Notify)했을 때 실제 렌더링/화면 갱신을 수행하는 콜백(Callback) 함수입니다.
+	# 	#반면, 지금처럼 분리해 두면 이벤트 발행(notify)은 단 1줄만 남고, 
+	# 	# 각 UI 컴포넌트들이 각자 on_event_cscan_settings_changed() 같은 수신 콜백을 등록하기만
+	# 	# 하면 되므로 코드가 매우 깨끗해집니다
+	# 	self.render_cscan()
 
+	#이걸 통합한다고 가정 하자 : 결국, 깔끔한 단일 방향이기만 하면 된다.
 
 	def on_row_change(self) -> None : 
 		# UI 이벤트 핸들러 (사용자 입력 -> Engine으로 전달하는 통로)
@@ -952,6 +953,7 @@ class UltrasoundSignalViewer:
 			self.line_cscan_vert.set_visible(True)
 		self.canvas.draw_idle()
 
+	
 	def update_ascan_plots(self) -> None :  #전체 plot들 업데이트
 	
 		#"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체) + 전체 Draw"""
@@ -1037,41 +1039,56 @@ class UltrasoundSignalViewer:
 		_filename = os.path.basename(self.data.file_paths[self.data.active_row])
 		self.lbl_loaded_info.config(text = f"{_filename} Loaded", foreground="green")
 
-	def on_mouse_hover(self, event_in) : 
-		if event_in.key != 'control' :
+
+	#Ctrl + Hover 통합 이벤트 및 0.1초 스트롤링
+
+	def on_mouse_hover(self, event_in):
+		if event_in.key != 'control':
 			return
 
+		# 0.1초 스트롤링
 		current_time = time.time()
-		if current_time - self.last_ascan_update_time < 0.05 :
+		if current_time - self.last_ascan_update_time < 0.1:
 			return
-		if event_in.inaxes == self.ax_bscan and event_in.xdata is not None :
+
+		# 1. B-Scan 상에서 Ctrl + Hover 시 (col만 변경)
+		if event_in.inaxes == self.ax_bscan and event_in.xdata is not None:
 			_col = int(round(event_in.xdata))
-			if 0 <= _col < self.data.num_cols :
-				self.last_ascan_update_time = current_time
-				self.engine.set_active_selection(self.data.active_row, _col)
-
-			elif event_in.inaxes == self.ax_cscan and event_in.xdata is not None and event_in.ydata is not None :
-				_col = int(round(event_in.xdata))
-				_row = int(round(event_in.ydata))
-
-				if 0<= _row < self.data.num_rows and 0 <= _col < self.data.num_cols :
+			if 0 <= _col < self.data.num_cols:
+				# 실제 col 위치가 바뀌었을 때만 처리 (불필요한 무거운 연산 방지)
+				if self.state.active_col != _col:
 					self.last_ascan_update_time = current_time
-					self.engine.set_active_selection(_row,_col)
 
-	def on_cscan_click(self, event_in) :
-		#Q. 그런데, Ctrl 버튼을 누른체 하는 조건이 포함된 게 맞나요? 아니면, 사용자 의도로 보기 힘든데도, 엄청 연산들이 진행될지도요.
+					# Spinbox col 숫자 즉시 업데이트
+					if self.spin_colget() != str(_col):
+						self.spin_col.delete(0, tk.END)
+						self.spin_col.insert(0, str(_col))
+
+					# Engine 상태 업데이트 -> update_ascan_plots 연쇄 호출
+					self.engine.set_active_selection(self.state.active_row, col)
+
+		# 2. C-Scan 상에서 Ctrl + Hover 시 (row, col 모두 변경)
+		elif event_in.inaxes == self.ax_cscan and event_in.xdata is not None and event_in.ydata is not None:
+			_col = int(round(event_in.xdata))
+			_row = int(round(event_in.ydata))
+
+			if 0 <= _row < self.data.num_rows and 0 <= _col < self.data.data.num_cols:
+				self.last_ascan_update_time = current_time
+				self.engine.set_active_selection(_row, _col)
+
+	def on_cscan_click(self, event_in):
+		# Q. 그런데, Ctrl 버튼을 누른체 하는 조건이 포함된 게 맞나요? 아니면, 사용자 의도로 보기 힘든데도, 엄청 연산들이 진행될지도요.
 		if event_in.inaxes == self.ax_cscan and event_in.xdata is not None and event_in.ydata is not None:
 			_col = int(round(event_in.xdata))
 			_row = int(round(event_in.ydata))
 			self.engine.set_active_selection(_row, _col)
 
-		#Q. B-SCAN은 호버 함수가 있는데, 사실 내가 사용자이면, C-SCAN에서 호버를 더 많이 할 듯요. C-SCAN용 호버도 필요합니다. 거기에도, 시간 0.1초 이상 그런 스트롤링 조건이 필수일듯요
+		# Q. B-SCAN은 호버 함수가 있는데, 사실 내가 사용자이면, C-SCAN에서 호버를 더 많이 할 듯요. C-SCAN용 호버도 필요합니다. 거기에도, 시간 0.1초 이상 그런 스트롤링 조건이 필수일듯요
 
-						
-	def on_bscan_hover(self, event) : 
-		#ctrl + 마우스 이동 시 쓰트롤링 업데이트
-		if event.inaxes == self.ax_bscan and event.key == 'control' :
-			if event.xdata is not None :
+	def on_bscan_hover(self, event):
+		# ctrl + 마우스 이동 시 스트롤링 업데이트
+		if event.inaxes == self.ax_bscan and event.key == 'control':
+			if event.xdata is not None:
 				_col = int(round(event.xdata))
 				if 0 <= _col < self.data.num_cols :
 					current_time = time.time()
