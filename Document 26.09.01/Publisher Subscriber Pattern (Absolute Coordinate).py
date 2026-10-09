@@ -382,7 +382,7 @@ class UltrasoundProcessorEngine:
 # 3. GUI View Layer
 # ==========================================
 class UltrasoundSignalViewer:
-    def __init__(self): 
+    def __init__(self): 	
         self.window = tk.Tk()
         self.window.title("Ultrasound Signal Viewer (Absolute ROI Mode)")
         self.window.geometry("1280x800")
@@ -447,8 +447,8 @@ class UltrasoundSignalViewer:
         ttk.Label(control_frame, text='BandPass', font=("Arial", 10, "bold")).grid(row=0, column=6, rowspan=2, padx=5)
         low_str = f"{self.state.filter_lowcut_MHz:.1f}"
         high_str = f"{self.state.filter_highcut_MHz:.1f}"
-        ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz', variable=self.view_mode_var, value='filtered', command=self.update_ascan_plots).grid(row=0, column=7, padx=5, pady=2, sticky="w")
-        ttk.Radiobutton(control_frame, text='Raw Data', variable=self.view_mode_var, value='raw', command=self.update_ascan_plots).grid(row=1, column=7, padx=5, pady=2, sticky="w")
+        ttk.Radiobutton(control_frame, text=f'Filtered {low_str}-{high_str}MHz', variable=self.view_mode_var, value='filtered', command=self.update_ascan_plots_all_cursors_redraw).grid(row=0, column=7, padx=5, pady=2, sticky="w")
+        ttk.Radiobutton(control_frame, text='Raw Data', variable=self.view_mode_var, value='raw', command=self.update_ascan_plots_all_cursors_redraw).grid(row=1, column=7, padx=5, pady=2, sticky="w")
 
         ttk.Separator(control_frame, orient='vertical').grid(row=0, column=8, rowspan=2, sticky="ns", padx=10)
 
@@ -552,7 +552,7 @@ class UltrasoundSignalViewer:
         self.publisher.subscribe("ROW_CHANGED", self.update_loaded_label)
         self.publisher.subscribe("ROW_CHANGED", self.render_bscan)
 
-        self.publisher.subscribe("SELECTED_ABEAM_CHANGED", self.update_ascan_plots)
+        self.publisher.subscribe("SELECTED_ABEAM_CHANGED", self.update_ascan_plots_all_cursors_redraw)
         self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
 
         self.publisher.subscribe("CSCAN_UPDATED", self.render_cscan)
@@ -580,14 +580,14 @@ class UltrasoundSignalViewer:
         self.line_roi_sig_for_A.set_xdata(_roi_x)
         self.line_roi_env.set_xdata(_roi_x)
 
-        self.render_bscan()
+        self.render_bscan()	
         self.render_cscan()
-        self.update_ascan_plots()
+        self.update_ascan_plots_all_cursors_redraw()
 
     def on_event_roi_updated(self):
         self.render_bscan()
         self.render_cscan()
-        self.update_ascan_plots() 
+        self.update_ascan_plots_all_cursors_redraw() 
 
     def on_cscan_setting_change(self) -> None:
         try:
@@ -627,7 +627,7 @@ class UltrasoundSignalViewer:
 
     def on_phase_inv_toggle(self):
         self.render_bscan()
-        self.update_ascan_plots()
+        self.update_ascan_plots_all_cursors_redraw()
 
     def open_csvs(self) -> None:
         paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
@@ -730,7 +730,7 @@ class UltrasoundSignalViewer:
             
         self.canvas.draw_idle()
 
-    def update_ascan_plots(self) -> None: 
+    def update_ascan_plots_all_cursors_redraw(self) -> None: 
         if self.data.raw_3d_cube is None: 
             return
         
