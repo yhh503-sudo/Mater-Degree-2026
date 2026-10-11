@@ -474,8 +474,7 @@ class UltrasoundProcessorEngine:
 
 				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)				
 				if s_start < s_end :
-					roi_3d_signal_32bit_cube[r, c, t_start : t_end] \
-					= self.data.filtered_3d_cube[r, c, s_start : s_end]
+					roi_3d_signal_32bit_cube[r, c, t_start : t_end] = self.data.filtered_3d_cube[r, c, s_start : s_end]
 
 				else:
 					pass# zero padding
@@ -509,7 +508,7 @@ class UltrasoundSignalViewer:
 		self.publisher : DataEventPublisher = DataEventPublisher()
 		self.data : UltrasoundCubeData = UltrasoundCubeData()
 		#엔진안에, 이미 data가 들어있는거 아님? 주입성으로 넣은 것임?
-		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data = self.data, publisher_in=self.publisher)
+		self.engine :UltrasoundProcessorEngine = UltrasoundProcessorEngine(data_in = self.data, publisher_in=self.publisher)
 
 		self.view_mode_var = tk.StringVar(value = 'raw')
 		self.align_method_var = tk.StringVar(value = self.state.align_method)
@@ -665,7 +664,7 @@ class UltrasoundSignalViewer:
 	
 	def setup_plots(self) : #플롯 세부 설정 위임 : 중간에 초기화들에 사용
 	
-		#ROX Axis : 여기에 총 구성요소 2개
+		#ROI Axis : 여기에 총 구성요소 2개
 		self.ax_roi.set_title("ROI Align Signal", fontsize=9, fontweight='bold')
 		self.ax_roi.grid(True, linestyle='--', alpha=0.5)
 		self.line_roi_sig_for_A = self.ax_roi.plot([], [], color='#1f77b4', lw=1.0, label='Signal')[0]
@@ -696,7 +695,7 @@ class UltrasoundSignalViewer:
 		self.ax_bscan.set_ylabel("Depth Samples")
 		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00', lw=1.5, visible=False)
 		#추가]Align Target 위치(Y축 고정값)에 빨간 구분선 표시
-		self.ax_bscan.axhile(y=self.state.align_target_index, color='red',ls=':', lw=1.2)
+		self.ax_bscan.axhline(y=self.state.align_target_index, color='red',ls=':', lw=1.2)
 
 		#C Scan Axis : 커서가 row, col 총 2개 존재함
 		self.ax_cscan.set_title("C-SCAN", fontsize=11, fontweight='bold')
@@ -802,8 +801,8 @@ class UltrasoundSignalViewer:
 			self.engine.set_active_selection(r,c) 
 		except :
 			print("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요")
-			r = self.data.active_row
-			c = self.data.active_col
+			r = self.state.active_row
+			c = self.state.active_col
 			self.engine.set_active_selection(r,c) 
 			pass
 
@@ -839,11 +838,11 @@ class UltrasoundSignalViewer:
 		"""B-Scan 2D 이미지 갱신"""
 		#1. B Scan 1채널 흑백 버퍼 캐싱 및 Phaser Inverse RGB 오버레이
 
-		if self.data.roi_cube_8bit_for_B is None :
+		if self.data.roi_3d_cube_8bit_for_B is None :
 			raise ValueError("B스캔 버퍼 만들기 실패. 큐브 생성 파이프라인을 실행한 적이 없습니다") 
 			return
 
-		_r = self.data.active_row
+		_r = self.state.active_row
 		self.bscan_2d_gray_0Depth_1Col = self.data.roi_3d_cube_8bit_for_B[_r].T #전치
 		_depth, _collumn = self.bscan_2d_gray_0Depth_1Col.shape
 
@@ -906,17 +905,15 @@ class UltrasoundSignalViewer:
 			print(f"C-Scan map 완성된 것 없음")
 			return
 
+		extent = [0, self.data.num_cols - 1, self.data.num_rows - 1, 0]
+		#extent = [left,right,bottom,top]
+
 		if self.cscan_img_display is not None :
 			self.cscan_img_display.set_data (self.data.active_cscan_map)
 		
 		else :
 			# 없으면 생성, 처음에만 실행됨
-			self.cscan_img_display = self.ax_cscan.imshow(
-				self.data.active_cscan_map,
-				cmap='gray',
-				aspect='auto',
-				origin='upper'
-				)
+			self.cscan_img_display = self.ax_cscan.imshow(self.data.active_cscan_map,cmap='gray',aspect='auto',origin='upper',Qextent = extent)
 			self.line_cscan_horiz.set_visible(True)
 			self.line_cscan_vert.set_visible(True)
 		self.canvas.draw_idle()
@@ -927,11 +924,11 @@ class UltrasoundSignalViewer:
 		#"""경량화된 실시간 업데이트 루틴 (Y축 전용 교체) + 전체 Draw"""
 		# SELECTION_CHANGED 발생 시 실행 : A-Scan들 및 커서 위치만 경량 업데이트
 
-		if self.data.raw_cube is None : 
+		if self.data.raw_3d_cube is None : 
 			print(f"UI 업데이트 실패 : raw cube가 없음")
 			return
 		
-		r, c = self.data.active_row, self.data.active_col
+		r, c = self.state.active_row, self.state.active_col
 		mode = self.view_mode_var.get()
 
 		#"메모리의 r 값과 화면 Spinbox의 글자가 다르면 화면 글자도 r로 바꿔라"라는 UI 동기화 작업
@@ -957,7 +954,7 @@ class UltrasoundSignalViewer:
 		self.line_whole_sig.set_ydata(sig)
 		self.line_whole_env.set_ydata(env)
 
-		self.engine.update_active_align_map_pointer()\		
+		self.engine.update_active_align_map_pointer()		
 		align_idx : int = self.data.active_align_map[r, c]
 		self.line_align_mark.set_xdata([align_idx, align_idx])
 		inv_idx = self.data.phase_inv_map[r,c]
@@ -986,8 +983,8 @@ class UltrasoundSignalViewer:
 		if self.data.roi_3d_cube_float_for_A is not None : 	
 			self.line_roi_sig_for_A.set_ydata(self.data.roi_3d_cube_float_for_A[r,c])
 
-		if self.data.roi_3d_env_cube_float_for_B is not None:
-			self.line_roi_env.set_ydata(self.data.roi_3d_env_cube_float_for_B[r, c])
+		if self.data.roi_3d_env_cube_float_for_A is not None:
+			self.line_roi_env.set_ydata(self.data.roi_3d_env_cube_float_for_A[r, c])
 
 
 		#주요 포인트 : B-Scan 초록색 커서 선분 위치 업데이트 (Col 위치에 맞춤)
@@ -1008,10 +1005,10 @@ class UltrasoundSignalViewer:
 
 	
 	def update_loaded_label(self) -> None: 
-		if not self.data.file_paths or self.data.active_row >= len(self.data.file_paths) : 
+		if not self.data.file_paths or self.state.active_row >= len(self.data.file_paths) : 
 			print(f"아직 읽은 csv파일들이 없거나, 설정한 값이 가능 row 범위를 넘어갔습니다.")
 			return
-		_filename = os.path.basename(self.data.file_paths[self.data.active_row])
+		_filename = os.path.basename(self.data.file_paths[self.state.active_row])
 		self.lbl_loaded_info.config(text = f"{_filename} Loaded", foreground="green")
 
 
@@ -1052,7 +1049,7 @@ class UltrasoundSignalViewer:
 			_col = int(round(event_in.xdata))
 			_row = int(round(event_in.ydata))
 
-			if 0 <= _row < self.data.num_rows and 0 <= _col < self.data.data.num_cols :
+			if 0 <= _row < self.data.num_rows and 0 <= _col < self.data.num_cols :
 				if self.state.active_row != _row or self.state.active_col!=_col:
 	
 					self.last_ascan_update_time = current_time
