@@ -198,7 +198,11 @@ class UltrasoundProcessorEngine:
 			self.state.active_col = 0
 
 			#Event Notify] 전체 데이터로 로드 완료
+			print(f"DATA LOADED notify 실행까지는 완료")
 			self.publisher.notify("DATA_LOADED")
+		
+			print(f"load_files_to_cube success")
+		
 			return True
 
 		except Exception as e:
@@ -235,6 +239,9 @@ class UltrasoundProcessorEngine:
 
 		#5. roi cube : a, b, c 스캔 만듦
 		self.update_roi_cube_A_B_C()
+
+		
+		print(f"process_cube_pipeline success")
 
 
 	def set_active_selection(self, row_in : int, col_in : int) -> None : 
@@ -491,6 +498,7 @@ class UltrasoundProcessorEngine:
 		# 4. Align 재정렬에 맞춰 C-Scan 맵도 자동 재계산
 		self.generate_single_cscan(self.state.cscan_gate_start, self.state.cscan_gate_end)
 
+		print(f"update roi cube abc success")
 
 # ==========================================
 # 3. GUI Processor (Tkinter Interface) : Subscriber / Event-Driven View
@@ -828,6 +836,8 @@ class UltrasoundSignalViewer:
 			#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
 			self.engine.load_files_to_cube(list(paths))
 
+		print(f"open_csvs success")
+
 #
 # 화면 랜더링 함수들 (UI 업데이트)
 #
@@ -867,7 +877,7 @@ class UltrasoundSignalViewer:
 		if is_yellow_apply :
 			# RGB 3채널 배열 생성 (오버레이 적용 시에만 동적 할당)
 			self.engine.update_active_align_map_pointer()
-			active_align_map = self.data.active_align_map
+			active_align_map = self.state.active_align_map
 			target_align_idx = self.state.align_target_index
 	
 			## Vectorized 또는 범위 검증 루프
@@ -913,7 +923,7 @@ class UltrasoundSignalViewer:
 		
 		else :
 			# 없으면 생성, 처음에만 실행됨
-			self.cscan_img_display = self.ax_cscan.imshow(self.data.active_cscan_map,cmap='gray',aspect='auto',origin='upper',Qextent = extent)
+			self.cscan_img_display = self.ax_cscan.imshow(self.data.active_cscan_map,cmap='gray',aspect='auto',origin='upper',extent = extent)
 			self.line_cscan_horiz.set_visible(True)
 			self.line_cscan_vert.set_visible(True)
 		self.canvas.draw_idle()
@@ -955,7 +965,7 @@ class UltrasoundSignalViewer:
 		self.line_whole_env.set_ydata(env)
 
 		self.engine.update_active_align_map_pointer()		
-		align_idx : int = self.data.active_align_map[r, c]
+		align_idx : int = self.state.active_align_map[r, c]
 		self.line_align_mark.set_xdata([align_idx, align_idx])
 		inv_idx = self.data.phase_inv_map[r,c]
 	
