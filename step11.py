@@ -604,7 +604,7 @@ class ProgressPopupWindow(tk.Toplevel): #상단(UI 클래스 이전)에 팝업�
 		#이것은 "화면 배치" 차원의 부모
 		super().__init__(owner_window) #super()는 "나에게 기능을 물려준 객체지향 부모 클래스(tk.Toplevel)
 		self.title("CSV DATA CUBE Loading...")
-		self.geometry("380*130")
+		self.geometry("380x130")
 		self.resizable(False,False)
 
 		# 메인 창 중앙에 맞추고 메인 창 클릭 방지(Modal)
@@ -627,7 +627,7 @@ class ProgressPopupWindow(tk.Toplevel): #상단(UI 클래스 이전)에 팝업�
 		#Tkinter  메인 쓰레드 안심 업데이트
 		def _update():
 			self.progress['value'] = percent
-			self.lblstatus.config(text=f'{current_idx} / {self.total_files} Files Loaded ({percent}%)')
+			self.lbl_status.config(text=f'{current_idx} / {self.total_files} Files Loaded ({percent}%)')
 		self.after(0,_update)
 
 	def close_popup(self) :
@@ -960,7 +960,7 @@ class UltrasoundSignalViewer:
 		self.render_bscan()
 		self.update_ascan_plots_all_cursors_redraw()
 
-	def open_csv(self) -> None:
+	def open_csvs(self) -> None:
 		path = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
 		if not path:
 			return
