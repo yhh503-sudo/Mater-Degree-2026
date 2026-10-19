@@ -209,6 +209,53 @@ class UltrasoundProcessorEngine:
 			print(f"csv파일들-> cube 과정에서 문제가 발생 : {e}")
 			return False
 
+	def load_files_to_cube(self, file_paths:List[str], progress_callback:Optional[Callable[[int,int],None]]=None)->bool:
+		if not file_paths:
+			return False
+
+		try: 
+			#CUBE 차원 정보 설정 및 클래스 멤버 변수 저장
+			self.data.num_rows = len(file_paths)
+			self.data.file_paths = file_paths
+
+			df_first = pd.read_csv(file_paths[0],header=None)
+			self.data.num_cols = len(df_first)
+			self.data.num_samples = len(df_first.iloc[0].dropna().values)
+			self.data.raw_3d_cube = np.zeros((self.data.num_rows,self.data.num_cols,self.data.num_samples),dtype=np.int16)
+
+			for row_idx, fpath in enumerate(file_paths) : 
+				df = pd.read_csv(fpath, header=None).dropna(axis=1,how='all')
+				self.data.raw_3d_cube[row_idx] = df.values.astype(np.int16)
+
+				#파일 성공시마다 진행률 콜백 전달 (현재 파일 수, 퍼센트)
+				if progress_callback:
+					pct = int(((row_idx + 1)/self.data.num_rows)*100)
+					progress_callback(row_idx + 1, pct)
+
+			self.data.shared_sample_indices = np.arange(self.data.num_samples,dtype=np.int16)
+			time_dist = 1.0 / self.state.sampling_rate
+			freq_hz = np.fft.rfftfreq(self.data.num_samples, d=time_dist)
+			self.data.shared_fft_freqs_MHz = freq_hz / 1e6
+
+			#Ref 템플릿 로드
+			self._load_ref_template()
+						
+			#전체 3D 큐브 파이프라인 연산
+			self.process_cube_pipeline()
+			
+			#변경] 데이터 로드 후, 기본 상태로 초기화
+			self.state.active_row = 0
+			self.state.active_col = 0
+			
+			#Event Notify] 전체 데이터로 로드 완료
+			print(f"DATA LOADED notify 실행까지는 완료")
+			self.publisher.notify("DATA_LOADED")
+					
+			print(f"load_files_to_cube success")
+
+		except Exception as e:
+			print(f"csv파일들->cube 과정에서 문제가 발생 : {e}")
+			return False
 
 	def _load_ref_template(self) -> None :
 		_path = self.state.ref_template_csv_path
@@ -501,13 +548,19 @@ class UltrasoundProcessorEngine:
 		print(f"update roi cube abc success")
 
 	def load_files_to_cube_threaded(self, file_paths : List[str], progress_callback : Callable[[int,int],None], done_callback:Callable[[],None]) -> None:
+		#Callable[[int, int], float]라고 적혀 있다면 "정수(int) 2개를 인자로 받아 실수(float)를 반환하는 함수"만 전달받겠다는 뜻입니다.
 		def _wokrer():
+			#이 작업 단위(_worker)가 오직 이 메인 함수 안에서만 쓰이는 일회성 로직일 때, 클래스 전체에 불필요한 메서드를 늘리지 않고 내부에 숨겨둘 수
 			try:
 				self.load_files_to_cube(file_paths,progress_callback)
 			finally:
 				done_callback() #성공하든 에러가 되든 팝업창 자동으로 닫기
+		
 		#쓰레드 생성(작업 완료시 자동 소멸)
 		thread = threading.Thread(target=_wokrer, daemon=True)
+		#UI/메인 쓰레드가 멈추는 것(Freezing)을 방지해야 하는 상황에서 매우 흔하고 일반적인 패턴
+		#함수 내부에서 백그라운드 쓰레드를 생성해서 던져놓는(Fire and Forget) 방식이 가장 명확하고 간편한 구현 패턴
+		#daemon=True 옵션은 메인 프로그램이 종료되면 이 백그라운드 쓰레드도 기다리지 않고 즉시 함께 종료되도록 설정하는 것으로, 깔끔한 쓰레드 생명주기 관리
 		thread.start()
 	
 
@@ -515,15 +568,48 @@ class UltrasoundProcessorEngine:
 # 3. GUI Processor (Tkinter Interface) : Subscriber / Event-Driven View
 # ==========================================
 
+class Animal :
+	def __init__(self, name : str, age :int) :
+		self.name = name
+		self.age = age
+	def speak(self) : 
+		print(f"{self.name}이 소리를 냅니다.")
+	def info(self) :
+		print(f"이름 :{self.name},나이 : {self.age}살")
+
+class	Dog (Animal) :
+	def __init__(self, name:str,age:int,breed:str) : 
+		#super()를 통해, 부모 클래스의 __init__ 메서드 호출 및 변수 초기화
+		super().__init__(name,age) 
+		#부모 클래스의 속성 초기화 로직을 그대로 재사용
+		self.breed = breed #자식 클래스만의 새로운 속성 추가
+	
+	#메서드 오버라이딩 : 부모의 speak메서드를 재정의
+	def speak(self):
+		print(f"{self.name}이 멍멍! 하고 짖습니다.")
+
+	#자식 클래스만의 고유 메서드 추가
+	def fetch(self):
+		print(f"{self.name}이 공을 물어옵니다.")
+
+
+
+
+
 class ProgressPopupWindow(tk.Toplevel): #상단(UI 클래스 이전)에 팝업창 클래스를 작성
-	def __init__(self,parent, total_files :int):
-		super().__init__(parent)
+	#tk.Toplevel은 메인 창 위에 독립적으로 뜨는 '서브 팝업 창(Top-level Window)'을 만드는 Tkinter의 기본 클래스
+	#이것은 "설계도" 차원의 상속
+
+	def __init__(self, owner_window, total_files :int):
+		#이것은 "화면 배치" 차원의 부모
+		super().__init__(owner_window) #super()는 "나에게 기능을 물려준 객체지향 부모 클래스(tk.Toplevel)
 		self.title("CSV DATA CUBE Loading...")
 		self.geometry("380*130")
 		self.resizable(False,False)
 
 		# 메인 창 중앙에 맞추고 메인 창 클릭 방지(Modal)
-		self.transient(parent)
+		self.transient(owner_window) 
+		#transient = 일시적으로 머무르는
 		self.grab_set()
 
 		self.total_files = total_files
@@ -551,19 +637,11 @@ class ProgressPopupWindow(tk.Toplevel): #상단(UI 클래스 이전)에 팝업�
 		self.after(0,_close)
 
 
-
-
-
-
-
-
-
-
 class UltrasoundSignalViewer:
 
 	#스스로 그래프를 그리는 것이 아니라, Engine에서 알림(Notify)이 날아오면 그 반응으로 화면을 업데이트
 	def __init__(self) : 
-		self.window = tk.Tk()
+		self.window = tk.Tk() #프로그램 전체의 '메인 창(Main Window)'
 		self.window.title("Ultrasound Signal Viewer (Step 10)")
 		self.window.geometry("1280x800")
 
@@ -881,19 +959,34 @@ class UltrasoundSignalViewer:
 		#"시스템의 데이터 상태(Model/Engine State)가 바뀌는 핵심 이벤트만 Publisher를 타고, 화면 표현을 위한 단순 렌더링 옵션(View State)은 View 내부에서 가볍게 처리한다
 		self.render_bscan()
 		self.update_ascan_plots_all_cursors_redraw()
-	
 
-	def open_csvs(self) -> None:
-		paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
-		if not paths :
+	def open_csv(self) -> None:
+		path = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+		if not path:
 			return
-		else:
-			#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
-			self.engine.load_files_to_cube(list(paths))
+		file_list = list(path)
+		
+		#1. 진행률 전용 팝업창 생성
+		popup = ProgressPopupWindow(self.window, total_files=len(file_list))
 
-		print(f"open_csvs success")
+		#2. 백그라운드 쓰레드로 파일 로드 시작
+		self.engine.load_files_to_cube_threaded(
+			file_paths = file_list,
+			progress_callback=popup.update_progress,
+			done_callback=popup.close_popup
+		)
 
-#
+# 	def open_csvs(self) -> None:
+# 		paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+# 		if not paths :
+# 			return
+# 		else:
+# 			#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
+# 			self.engine.load_files_to_cube(list(paths))
+
+# 		print(f"open_csvs success")
+
+# #
 # 화면 랜더링 함수들 (UI 업데이트)
 #
 
