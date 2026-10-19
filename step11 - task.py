@@ -27,6 +27,7 @@ class DataEventPublisher :
 	#데이터 및 Config 변경 이벤트를 구독자에게 알리는 이벤트 발행자 클래스
 	#엔진은 UI가 누구인지, 존재하는지조차 모릅니다. 메모리는 똑같이 쓰지만 연락망(Publisher)만 이용합니다.
 	#UI를 Tkinter에서 Web으로 바꾸든, CLI로 바꾸든, UI를 3개 더 추가하든 Engine 코드는 단 한 줄도 수정할 필요가 없습니다.
+	#프로그래밍에서 **콜백(Callback)**은 "지금 당장 실행하지 말고, 나중에 특정 상황(이벤트)이 발생하면 내가 준 이 번호(함수)로 전화를 걸어줘!"
 
 	def __init__(self):
 		self._subscribers : Dict[str, List[Callable[[],None]]] = {} ## 단순히 { "이벤트이름": [콜백함수1, 콜백함수2] } 형태
@@ -112,6 +113,7 @@ class CLayer :
 	slice_index : int = 0 
 	#Q. Slice_index 보면 조금 이상한게, depth start-end로 충분한 거 아닌가요? 뭐죠? 나중에 여러개 c-layer관리때 사용
 
+
 # [개선] 순수 데이터 컨테이너 (slots=True 메모리 최적화 유지)
 @dataclass(slots=True) 
 class UltrasoundCubeData:
@@ -161,28 +163,41 @@ class UltrasoundProcessorEngine:
 		self.data : UltrasoundCubeData = data_in #외부에서 주입
 		self.publisher : DataEventPublisher = publisher_in #외부에서 주입
 		self.state : AppState = AppState()
-		## Task 단위 처리를 담당할 백그라운드 스레드 풀 생성 (1개의 비동기 Task 채널 관리)
-		self._excutor : ThreadPoolExecutor = ThreadPoolExecutor(max_workers=1)
 
+		#변경점1 : 백그라운드 Task 연산을 전담할 Excutor Pool 할당
+		## Task 단위 처리를 담당할 백그라운드 스레드 풀 생성 (1개의 비동기 Task 채널 관리)
+		self._executor : ThreadPoolExecutor = ThreadPoolExecutor(max_workers = 1)
+
+	#변경점2 : Task 로딩 전용 메서드 추가
 	def load_files_to_cube_task(
 			self, 
 			file_paths : List[str], 
-			progress_callback : Optional[Callable[[int,int],None]]=None, 
-			done_callback : Optional[Callable[[],None]]=None) -> Future :
+			_progress_callback : Optional[Callable[[int,int],None]] = None, 
+			#Callable[[입력_타입1, 입력_타입2], 반환_타입]
+			#: CSV 파일을 1개 읽어 들일 때마다 UI(팝업창)의 진행률을 갱신하기 위해 호출할 함수 주소
+			_done_callback : Optional[Callable[[],None]] = None
+			) -> Future :
 		#직접 스레드를 생성하는 방식 대신, Task를 풀에 제출(submit)하여 비동기로 실행
 		
 		# 1.비동기 작업Task 제출 : submit(): self.load_files_to_cube 작업을 Task로 풀에 던져서 백그라운드 연산을 시작
 		# future: 비동기 작업 결과 및 상태 정보를 가진 '영수증' 객체
-		future : Future = self._executor.submit(self.load_files_to_cube, file_paths, progress_callback)
+		future : Future = self._executor.submit(self.load_files_to_cube, 
+		                                       file_paths, 
+											   _progress_callback)
+		# load_files_to_cube 함수로 전달될 인자들 : _paths, progress_callback
 
-		#2.Task가 완료되면(성공/에러 불문) 팝업 창을 닫도록 콜백 연동
-		#Task 작업 연산이 끝나는 순간(성공/에러 불문) done_callback(팝업창 close_popup)을 자동 호출합니다.
-		if done_callback : 
-			future.add_done_callback(lambda f : done_callback())
-		
+
+		if _done_callback : 
+			#2.Task가 완료되면(성공/에러 불문) 팝업 창을 닫도록 콜백 연동
+			#Task 작업 연산이 끝나는 순간(성공/에러 불문) done_callback(팝업창 close_popup)을 자동 호출
+			future.add_done_callback(lambda f : _done_callback())	
+			# """Attaches a callable that will be called when the future finishes.	
 		return future
 
-	def load_files_to_cube(self, file_paths : List[str], progress_callback:Optional[Callable[[int,int],None]]=None)->bool : 
+
+	def load_files_to_cube(self, 
+	                       file_paths : List[str], 
+						   _progress_callback:Optional[Callable[[int,int],None]] = None) -> bool : 
 		if not file_paths:
 			return False
 
@@ -203,9 +218,10 @@ class UltrasoundProcessorEngine:
 				self.data.raw_3d_cube[row_idx] = df.values.astype(np.int16)
 
 				## [콜백 사용 1] CSV 1개를 읽을 때마다 팝업창 UI로 (현재 개수, 퍼센트) 진행률을 통보
-				if progress_callback :
-					pct = int(((row_idx + 1)/self.data.num_rows)*100)
-					progress_callback(row_idx + 1, pct)
+				if _progress_callback :
+					_percent = int(((row_idx + 1)/self.data.num_rows)*100)
+					_progress_callback(row_idx + 1, _percent)
+					#함수 호출
 
 			#x축들 생성 : 일반 인덱스 및 주파수 축 생성
 			self.data.shared_sample_indices = np.arange(self.data.num_samples, dtype=int)
@@ -531,7 +547,7 @@ class UltrasoundProcessorEngine:
 
 # [상속 적용] tk.Toplevel(기본 서브 창)을 상속받아 프로그레스 팝업창 구현
 class ProgressPopupWindow(tk.Toplevel):
-	def __init__(self,owner_window,total_files:int): 
+	def __init__(self, owner_window, total_files:int): 
 		super().__init__(owner_window)
 		self.title("CSV DATA CUBE Loading...")
 		self.geometry("380x130")
@@ -551,6 +567,22 @@ class ProgressPopupWindow(tk.Toplevel):
 		self.progress.pack(pady=(5,15))
 
 	# [콜백 수신 함수 1] 백그라운드 연산 진행 상황을 메인 UI thread 안전하게 전달받는 콜백
+	def update_progress(self, current_idx : int, percent : int) :
+		def _update() :
+			self.progress['value'] = percent
+			self.lbl_status.config(text = f'{current_idx}/ {self.total_files} Files Loaded ({percent}%)')
+		self.after(0, _update)
+		#"대기 시간 없이, 메인 UI 쓰레드가 할 일을 마치고 한가해지는 즉시(0밀리초 뒤) 실행해라
+		# 안전하게 할 일을 넘겨주는(Queue에 등록하는) 역할
+		#self.after(0, _update)를 통해 메인 UI 쓰레드의 대기열에 이 작업을 던져넣음
+
+	#콜백 수신 함수2] 연산 Task 완료 후 팝업창을 안전하게 닫아주는 콜백
+	def close_popup(self) : 
+		def _close():
+			self.grab_release()
+			self.destroy()
+		self.after(0, _close)
+
 
 class UltrasoundSignalViewer:
 
@@ -598,7 +630,6 @@ class UltrasoundSignalViewer:
 	# --------------------------------------------------------------------------
     # UI 생성 루틴
     # --------------------------------------------------------------------------
-
 
 	def create_widgets(self) : 
 
@@ -827,13 +858,14 @@ class UltrasoundSignalViewer:
 
 		_merge_mode = self.cscan_merge_var.get()
 		_stretch_mode = self.cscan_stretch_var.get()
-		self.engine.set_cscan_parameters(d_start, d_end, stretch_mode = _stretch_mode, merge_mode=_merge_mode)
+		self.engine.set_cscan_parameters(d_start, d_end, stretch_mode = _stretch_mode, merge_mode = _merge_mode)
 
 
 	def on_row_change(self) -> None : 
 		# UI 이벤트 핸들러 (사용자 입력 -> Engine으로 전달하는 통로)
 		# ROW 변경시 : B-San 전체 재 랜더링 + A-Scan 업데이트
 		"""UI에서 스핀박스로 Row 조작 시"""
+
 		try:
 			_r = int(self.spin_row.get())
 			_c = int(self.spin_col.get())
@@ -841,6 +873,7 @@ class UltrasoundSignalViewer:
 			# Engine이 알고리즘 판단 후 ROW_CHANGED / SELECTION_CHANGED 이벤트를 던집니다.
 			self.engine.set_active_selection(_r, _c)
 			#self.update_loaded_label()
+
 		except : 
 			print("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요. 기존 data사용")
 			_r = self.state.active_row
@@ -876,16 +909,32 @@ class UltrasoundSignalViewer:
 		self.update_ascan_plots_all_cursors_redraw()
 	
 
+	# def open_csvs(self) -> None:
+	# 	paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+	# 	if not paths :
+	# 		return
+	# 	else:
+	# 		#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
+	# 		self.engine.load_files_to_cube(list(paths))
+
+	# 	print(f"open_csvs success")
+
 	def open_csvs(self) -> None:
-		paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
-		if not paths :
+		path = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
+		if not path:
 			return
-		else:
-			#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
-			self.engine.load_files_to_cube(list(paths))
+		file_list = list(path)
 
-		print(f"open_csvs success")
+		#1.진행률 전용 팝업창 생성 : 상속받아 만든 ProgressPopupWindow 객체 생성
+		_popup = ProgressPopupWindow(self.window,total_files=len(file_list))
 
+		#2. 스레드 직접 생성 방식 대신 Excutor Task 비동기 로딩 시작
+		#엔진의 Task 로더 함수로 콜백2개(update_progress, close_popup)를 전달하여 비동기 실행 시작
+		self.engine.load_files_to_cube_task(
+			file_paths=file_list,
+			_progress_callback=_popup.update_progress,
+			_done_callback=_popup.close_popup
+		)
 #
 # 화면 랜더링 함수들 (UI 업데이트)
 #
