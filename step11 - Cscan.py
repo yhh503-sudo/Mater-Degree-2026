@@ -71,8 +71,8 @@ class AppState:
 	align_method : str = 'envelope_peak'
 	
 	#변경후 : ROI Sample Index [0 ~ roi_total_samples] 기준으로 직관적 정의
-	roi_total_samples : int = 600
-	align_target_index : int = 200
+	roi_total_samples : int = 700
+	align_target_index : int = 100
 
 	#4. TGC & Log Compression 설정
 	tgc_enable : bool = True
@@ -85,7 +85,7 @@ class AppState:
 	ref_template_csv_path : str = "Document 26.09.01/ref.csv"
 	number_of_samples_in_whold_Abeam : int = 0
 	phase_inv_search_start_offset_from_align : int = 100
-	phase_inv_search_end_offset_from_align : int = 480
+	phase_inv_search_end_offset_from_align : int = 580
 	phase_inv_neg_threshold : float = -0.4
 	phase_inv_roi_ratio : float = 1.0
 	phase_inv_whole_pos_ratio : float = 0.15
@@ -215,7 +215,14 @@ class UltrasoundProcessorEngine:
 
 			for row_idx, fpath in enumerate(file_paths) : 
 				df = pd.read_csv(fpath, header = None).dropna(axis=1, how='all')
-				self.data.raw_3d_cube[row_idx] = df.values.astype(np.int16)
+				_data_check = df.values.astype(np.int16)
+
+				#지그재그 : 래스터 스캔 방향 보정
+				if row_idx %2 == 1 :
+					_data_check = _data_check[::-1,:] 
+					# Col 순서(첫 번째 축)를 좌우 반전
+					
+				self.data.raw_3d_cube[row_idx] = _data_check
 
 				## [콜백 사용 1] CSV 1개를 읽을 때마다 팝업창 UI로 (현재 개수, 퍼센트) 진행률을 통보
 				if _progress_callback :
@@ -510,6 +517,7 @@ class UltrasoundProcessorEngine:
 
 				roi_start = align_ads_idx - _target_align_idx 
 				#571-200=371
+
 				roi_end = roi_start + roi_len
 				#371+600=971
 				#: 즉, 371~971을 ROI로 잘라 써라.
@@ -518,10 +526,11 @@ class UltrasoundProcessorEngine:
 				s_end = min(self.data.num_samples, roi_end)
 
 				t_start = s_start - roi_start  # 대부분 0
-				t_end = t_start + (s_end - s_start)  # 항상 양수이며, roi_len(pre+post) 이하
+				t_end = t_start + (s_end - s_start)  # 항상 양수이며, roi_len (pre + post) 이하
 
 				# 경계 유효성 검사 후 데이터 대입 (미대입 영역은 자동으로 0.0 Zero-Padding 유지)				
 				if s_start < s_end :
+
 					roi_3d_signal_32bit_cube[r, c, t_start : t_end] = self.data.filtered_3d_cube[r, c, s_start : s_end]
 
 				else:
