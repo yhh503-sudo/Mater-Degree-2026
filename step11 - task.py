@@ -990,7 +990,7 @@ class UltrasoundSignalViewer:
 					roi_inv_idx = (inv_abs_idx - align_abs_idx) + target_align_idx 
 					#+200으로 최종 위치 옮김
 					if 0 <= roi_inv_idx < _depth : 
-						self._bscan_rgb_cache[roi_inv_idx, c] = [255,255,0] #노란색 마킹
+						self._bscan_rgb_cache[roi_inv_idx, c] = [255, 0, 0] #빨간색 마킹
 		else:
 			#no apply 상태일 떄는 원본 2d grey 버퍼를 그대로 참조 (메모리 복사 이미함)
 			pass
