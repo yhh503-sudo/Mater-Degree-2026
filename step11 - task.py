@@ -792,19 +792,23 @@ class UltrasoundSignalViewer:
 		self.fig.tight_layout()
 
 
-	def register_event_subscriptions(self) :
 
-		# 구독(Subscribe) 등록: 특정 이벤트 시 내 UI 업데이트 메서드들을 연결!
-        # ----------------------------------------------------------------------
-		# 이벤트 발행 시, 실행될 UI 콜백(Observer) 메서드 등록
-		self.publisher.subscribe("DATA_LOADED",self.on_event_datas_loaded)
-
-		# 2. Row 변경 시 실행 (B-Scan 갱신 + 라벨 갱신)
-		self.publisher.subscribe("ROW_CHANGED", self.update_loaded_label)
-		self.publisher.subscribe("ROW_CHANGED", self.render_bscan)
-		self.publisher.subscribe("SELECTED_ABEAM_CHANGED", self.update_ascan_plots_all_cursors_redraw)
-		self.publisher.subscribe("ROI_UPDATED", self.on_event_roi_updated)
-		self.publisher.subscribe("CSCAN_UPDATED", self.render_cscan)
+	def register_event_subscriptions(self):
+    	# Publisher를 통해 전달되는 모든 UI 업데이트 이벤트 콜백을 
+    	# lambda + self.window.after(0, ...)로 감싸서 메인 스레드로 안전하게 격리합니다.
+		#self.publisher.subscribe("DATA_LOADED",self.on_event_datas_loaded)#서브쓰레드가 바로 시작
+		#lambda:: 매개변수가 없는 익명(일회성) 함수 정의
+		#window.mainloop()의 주체는 메인 스레드입니다.
+		#프로그램 시작 시 app.run()을 통해 mainloop()를 실행한 주체는 오직 메인 스레드 하나뿐입니다.
+		#mainloop()는 무한 루프를 돌며 내부의 Tk Event Queue(메시지 우체통)에 들어오는 일거리들을 계속 감시합니다.
+		#after() 메서드는 메시지 큐에 작업을 추가(Push)만 합니다.
+		#after()는 함수를 직접 실행하는 게 아니라 메인 스레드가 돌리고 있는 mainloop() 우체통에 할 일을 등록하는 함수
+		self.publisher.subscribe("DATA_LOADED", lambda: self.window.after(0, self.on_event_datas_loaded))	
+		self.publisher.subscribe("ROW_CHANGED", lambda: self.window.after(0, self.update_loaded_label))
+		self.publisher.subscribe("ROW_CHANGED", lambda: self.window.after(0, self.render_bscan))
+		self.publisher.subscribe("SELECTED_ABEAM_CHANGED", lambda: self.window.after(0, self.update_ascan_plots_all_cursors_redraw))
+		self.publisher.subscribe("ROI_UPDATED", lambda: self.window.after(0, self.on_event_roi_updated))
+		self.publisher.subscribe("CSCAN_UPDATED", lambda: self.window.after(0, self.render_cscan))
 
 
 	# Event Driven Subscriber Callbacks (이벤트 반응 함수들)	
