@@ -635,7 +635,7 @@ class UltrasoundSignalViewer:
 
 		#Control Panel Main Frame
 		control_frame = ttk.LabelFrame(self.window,text = 'Control Panel', padding =6)
-		control_frame.pack(side=tk.TOP, fill = tk.X, padx=10, pady =5)
+		control_frame.pack(side=tk.TOP, fill = tk.X, padx=10, pady = 1)
 
 		# 1. Open Button (2행 높이 통합)
 		btn_open = ttk.Button(control_frame, text = 'Open CSVs', command = self.open_csvs)
@@ -688,7 +688,7 @@ class UltrasoundSignalViewer:
 
 		#Phase Inverse Control Group
 		ttk.Label(control_frame, text = 'Phase Inverse :', font=("Segoe UI", 9, "bold")).grid(row=0, column=12, padx=(0, 5), pady=2)
-		ttk.Radiobutton(control_frame,text="Blue Apply", variable=self.phase_inverse_var, value = "blue_apply", command =self.on_phase_inv_toggle).grid(row=0,column=13,padx=3,pady=2,sticky='w')
+		ttk.Radiobutton(control_frame,text="Inv Apply", variable=self.phase_inverse_var, value = "inv_apply", command =self.on_phase_inv_toggle).grid(row=0,column=13,padx=3,pady=2,sticky='w')
 		ttk.Radiobutton(control_frame,text="No Apply",variable=self.phase_inverse_var,value="no_apply",command=self.on_phase_inv_toggle).grid(row=1,column=13,padx=3,pady=2,sticky='w')
 
 		#Sperator 5
@@ -726,7 +726,7 @@ class UltrasoundSignalViewer:
 				
 		#Main Plot Layout
 		plot_frame = ttk.Frame(self.window)
-		plot_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=5)
+		plot_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=4)
 
 		self.fig = matplotlib.figure.Figure(figsize=(13, 7), dpi=100)
 		_gs = GridSpec(3, 2, figure=self.fig, width_ratios=[1,1.2])
@@ -741,13 +741,16 @@ class UltrasoundSignalViewer:
 		self.setup_plots()
 
 		self.canvas = FigureCanvasTkAgg(self.fig, master = plot_frame)
-		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH,expand=True)
 
 		# 인터랙션 연동
 		self.canvas.mpl_connect('motion_notify_event',self.on_mouse_hover)
 		
 		toolbar = NavigationToolbar2Tk(self.canvas,plot_frame)
 		toolbar.update()
+
+		# Canvas를 남은 상단 공간 전체(expand=True) 로 채움
+		self.canvas.get_tk_widget().pack(side=tk.TOP,fill=tk.BOTH, expand = True)
+
 	
 	def setup_plots(self) : #플롯 세부 설정 위임 : 중간에 초기화들에 사용
 	
@@ -782,7 +785,7 @@ class UltrasoundSignalViewer:
 		self.ax_bscan.set_ylabel("Depth Samples")
 		self.line_bscan_cursor = self.ax_bscan.axvline(x=0, color='#00ff00', lw=1.5, visible=False)
 		#추가]Align Target 위치(Y축 고정값)에 빨간 구분선 표시
-		self.ax_bscan.axhline(y=self.state.align_target_index, color='red',ls=':', lw=1.2)
+		self.ax_bscan.axhline(y=self.state.align_target_index, color='cyan',ls=':', lw=0.8)
 
 		#C Scan Axis : 커서가 row, col 총 2개 존재함
 		self.ax_cscan.set_title("C-SCAN", fontsize=11, fontweight='bold')
@@ -905,7 +908,7 @@ class UltrasoundSignalViewer:
 
 	
 	def on_phase_inv_toggle(self) :
-		"""Blue 오버레이 토글 시"""
+		"""Inv 오버레이 토글 시"""
 		#self.bscan_img_display : Optional[matplotlib.AxesImage] 바꾸는 것에 지나지 않음
 		#UI 클래스 내부 처리이기 떄문에 손 안 댐:구독 패턴(Publisher-Subscriber)은 시스템 전체가 공유해야 하는 '핵심 데이터 상태'가 바뀔 때 사용하는 것이 가장 좋습니다.
 		#"시스템의 데이터 상태(Model/Engine State)가 바뀌는 핵심 이벤트만 Publisher를 타고, 화면 표현을 위한 단순 렌더링 옵션(View State)은 View 내부에서 가볍게 처리한다
@@ -970,7 +973,7 @@ class UltrasoundSignalViewer:
 		extent = [0, _collumn-1, _depth-1, 0]	#extent = [left,right,bottom,top]
 
 		#3. Phase Inverse 토글 조건 분기 (메모리 재할당 최소화)
-		cond1 = self.phase_inverse_var.get() == "blue_apply"
+		cond1 = self.phase_inverse_var.get() == "inv_apply"
 		cond2 = self.data.phase_inv_map is not None
 		is_yellow_apply = cond1 and cond2
 
