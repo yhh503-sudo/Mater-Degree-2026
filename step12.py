@@ -925,16 +925,6 @@ class UltrasoundSignalViewer:
 		self.update_ascan_plots_all_cursors_redraw()
 	
 
-	# def open_csvs(self) -> None:
-	# 	paths = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
-	# 	if not paths :
-	# 		return
-	# 	else:
-	# 		#파일을 읽고 파이프라인 연산이 끝나면, Engine 내부에서 "DATA_LOADED"가 터짐
-	# 		self.engine.load_files_to_cube(list(paths))
-
-	# 	print(f"open_csvs success")
-
 	def open_csvs(self) -> None:
 		path = filedialog.askopenfilenames(filetypes=[("CSV files", "*.csv")])
 		if not path:
