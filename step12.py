@@ -30,7 +30,9 @@ class DataEventPublisher :
 	#프로그래밍에서 **콜백(Callback)**은 "지금 당장 실행하지 말고, 나중에 특정 상황(이벤트)이 발생하면 내가 준 이 번호(함수)로 전화를 걸어줘!"
 
 	def __init__(self):
-		self._subscribers : Dict[str, List[Callable[[],None]]] = {} ## 단순히 { "이벤트이름": [콜백함수1, 콜백함수2] } 형태
+		self._subscribers : Dict[str, List[Callable[[],None]]] = {}
+		#* **Key (key)**: `str` (문자열, 예: `"이벤트이름"`)[cite: 1]
+		#* **Value (value)**: `List[Callable[[], None]]` (인자가 없고 반환값이 없는 콜백 함수들의 리스트)[cite: 1]
 		#Callable = _CallableType(collections.abc.Callable, 2)
 
 	def subscribe(self, event_type_in : str, callback_in : Callable[[], None]) -> None : 
@@ -43,7 +45,7 @@ class DataEventPublisher :
 		'''등록된 구독자들에게 이벤트 발생 통보'''
 		if _event_type_in in self._subscribers : 
 			for _callback in self._subscribers[_event_type_in] :
-					_callback() # 리스트 0번부터 순차적으로 실행
+					_callback() # 리스트 0번부터 순차적으로 실행 : Notify에서 바로 _callback()실행까지
 
 
 
