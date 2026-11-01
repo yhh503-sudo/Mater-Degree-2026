@@ -18,6 +18,50 @@ import time
 from scipy.signal import butter, hilbert, filtfilt
 # [핵심] Thread 대신 Task (ThreadPoolExecutor / Future) 기반 비동기 처리를 위해 모듈 임포트
 from concurrent.futures import ThreadPoolExecutor, Future
+import threading #Queue 내 동기화 제어(Lock)을 위한 스레등 모듈 추가
+
+#스트롤링 대신해, 프레임워크 독립 최적화 : Size 1 Drop Queue
+class LatestCoordinateQueue : 
+	#이벤트 이력을 모두 쌓아두지 않고, 오직 '가장 마지막 좌표 1개'만 유지하는 큐
+	#마우스가 지나가는 수많은 중간 경로의 이벤트 발생들을 원천적으로 차단함
+
+	def __init__(self) :
+		self._coordinate : Optional[Tuple[int,int]] = None
+		self._lock = threading.Lock() #향후 PyQT등 멀티스레드 환경 전환시, 충돌 방지용
+		self._is_timer_running = False #타이머가 중복으로 도는 것을 방지
+
+	def push(self, row_in : int, col_in : int) -> None :
+		#새 마우스 좌표가 들어오면 무조건 기존 과거 좌표를 덮어씀 : 과거 이력 즉시 폐기
+
+		with self._lock : #스레드가 이 with 블록에 진입할 때 락(자물쇠)을 획득
+			self._coordinate = (row_in, col_in)
+
+	def pop_lastest_and_clear(self) -> Optional[Tuple[int,int]] :
+		#타이머에 의해 호출되며, 큐에서 가장 최신 좌표를 꺼내고 큐를 비웁니다.
+		with self._lock:
+			if self._coordinate is None :
+				return None
+			lastest = self._coordinate
+			self._coordinate = None #이게 Clear
+			return lastest
+	
+	def check_and_set_running(self) -> bool :
+		#타이머(소비자)가 이미 돌고 있는지 확인합니다. 안 돌고 있다면, True를 반환해 실행을 허락합니다.
+		with self._lock :
+			if self._is_timer_running == True:
+				return False #이미 누군가가, 큐를 비우기 위해 150ms를 대기 중임
+			else:
+				self._is_timer_running = True
+				return True
+			
+	def clear_running_state(self)->None :
+		#연산이 끝난 후, 다음 이벤트를 받을 수 있도록, 타이머 작동 상태를 초기화
+		with self._lock :
+			self._is_timer_running = False
+
+
+
+
 
 # ==========================================
 # 0. 인프라 Layer (Publisher)
@@ -890,8 +934,7 @@ class UltrasoundSignalViewer:
 			# UI가 직접 랜더링하는 것이 아니라 Engine의 위치를 바꾸면,
 			# Engine이 알고리즘 판단 후 ROW_CHANGED / SELECTION_CHANGED 이벤트를 던집니다.
 			self.engine.set_active_selection(_r, _c)
-			#self.update_loaded_label()
-
+			
 		except : 
 			print("스핀박스에 row, col 값이 제대로 입력되었는지 확인 필요. 기존 data사용")
 			_r = self.state.active_row
@@ -962,7 +1005,7 @@ class UltrasoundSignalViewer:
 		_depth, _collumn = self.bscan_2d_gray_0Depth_1Col.shape
 
 
-		#1. 뷰어 규격 변경 시에만 메모리 재할당
+		#1. 뷰어 규격 변경 시에만 메모리 재할당 `	`
 		if (self._bscan_rgb_cache is None) or (self._bscan_rgb_cache.shape != (_depth, _collumn, 3)) :
 			self._bscan_rgb_cache = np.empty((_depth, _collumn, 3), dtype = np.uint8) #실제 b스캔 data
 
