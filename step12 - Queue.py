@@ -142,6 +142,10 @@ class AppState:
 	cscan_stretch_mode : str = 'absolute'
 	cscan_merge_mode : str = 'max'
 
+	cscan_abs_min : int = 10
+	cscan_abs_max : int = 245
+	cscan_relative_std_multi_numbers : float = 2.0
+
 	def __post_init__(self) : 
 		self.update_filter_cutoffs()
 	
@@ -367,7 +371,7 @@ class UltrasoundProcessorEngine:
 
 	def generate_single_cscan(self, d_start : int, d_end : int) -> None : 
 		_layer = self.extract_cscan_layer(d_start, d_end, gate_mode = self.state.cscan_merge_mode)
-		_stretched_map = self.apply_histogram_stretch(_layer.data_8bit_2d_map, mode = self.state.cscan_stretch_mode)
+		_stretched_map = self.apply_histogram_stretch(_layer.data_8bit_2d_map, mode = self.state.cscan_stretch_mode, n_std = self.state.cscan_relative_std_multi_numbers,abs_range = (self.state.cscan_abs_min, self.state.cscan_abs_max))
 		self.data.active_cscan_map = _stretched_map
 		self.publisher.notify("CSCAN_UPDATED")
 		#Q. CSCAN UPDATED 노티파이 후에, CSCAN PARAMTERS UPDATED 노티파이가 맞는 건가?  중복되는 게 아닌가?
@@ -399,9 +403,9 @@ class UltrasoundProcessorEngine:
 
 	def apply_histogram_stretch(self, 
 							 cscan_2d : np.ndarray, 
-							 mode : str = 'absolute', 
-							 abs_range : Tuple[int,int] = (10, 245), 
-							 n_std : float = 2.0) -> np.ndarray :
+							 abs_range : Tuple[int,int],
+							 n_std : float,
+							 mode : str) -> np.ndarray :
 
 		#연산 위해 : 컨버트
 		img_float = cscan_2d.astype(np.float32)
