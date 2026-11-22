@@ -118,12 +118,12 @@ class AppState:
 	
 	#변경후 : ROI Sample Index [0 ~ roi_total_samples] 기준으로 직관적 정의
 	roi_total_samples : int = 700
-	align_target_index : int = 100
+	align_target_index : int = 50
 
 	#4. TGC & Log Compression 설정
 	tgc_enable : bool = True
-	tgc_start_sample_from_align : int = 0
-	tgc_slope_dB : float = 0.02
+	tgc_start_sample_from_align : int = 30
+	tgc_slope_dB : float = 0.03
 	log_cmp_alpha : float = 0.003
 	log_cmp_dynamic_range_dB : float = 35.0
 
